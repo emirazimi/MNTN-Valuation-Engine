@@ -54,11 +54,22 @@ class ForecastConfig:
     tax_rate: float
     revenue_fade_exponent: float
     margin_fade_exponent: float
+    capex_fade_exponent: float
+    nwc_fade_exponent: float
+    dilution_fade_exponent: float
     capex_intensity_floor: float
     capex_growth_sensitivity: float
     nwc_intensity_floor: float
     nwc_growth_sensitivity: float
+    terminal_capex_pct: float
+    terminal_nwc_pct: float
     dilution_rate: float
+    terminal_dilution_rate: float
+    sbc_pct_revenue_start: float
+    sbc_pct_revenue_end: float
+    sbc_fade_exponent: float
+    sbc_share_issuance_price_factor: float
+    overhang_years: int
 
 
 @dataclass(frozen=True)
@@ -105,6 +116,7 @@ class ValuationResults:
     macro_transition_df: pd.DataFrame
     summary_df: pd.DataFrame
     simulation_df: pd.DataFrame
+    horizon_summary_df: pd.DataFrame
     ending_regime_df: pd.DataFrame
     driver_corr_df: pd.DataFrame
     multiples_df: pd.DataFrame
@@ -116,4 +128,5 @@ class ValuationResults:
     growth_paths: Any
     margin_paths: Any
     wacc_paths: Any
+    share_paths: Any
     valuation_paths: Any

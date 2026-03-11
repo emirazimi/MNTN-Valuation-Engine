@@ -38,10 +38,21 @@
     "tax_rate": 0.25,
     "revenue_fade_exponent": 1.35,
     "margin_fade_exponent": 1.15,
+    "capex_fade_exponent": 1.2,
+    "nwc_fade_exponent": 1.15,
+    "dilution_fade_exponent": 1.1,
     "capex_intensity_floor": 0.02,
     "capex_growth_sensitivity": 0.08,
     "nwc_intensity_floor": 0.0,
     "nwc_growth_sensitivity": 0.06,
-    "dilution_rate": 0.015
+    "terminal_capex_pct": 0.025,
+    "terminal_nwc_pct": 0.01,
+    "dilution_rate": 0.015,
+    "terminal_dilution_rate": 0.005,
+    "sbc_pct_revenue_start": 0.06,
+    "sbc_pct_revenue_end": 0.03,
+    "sbc_fade_exponent": 1.1,
+    "sbc_share_issuance_price_factor": 1.15,
+    "overhang_years": 3
   }
 }

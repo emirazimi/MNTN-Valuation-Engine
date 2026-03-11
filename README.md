@@ -33,6 +33,7 @@ Data-backed Python valuation engine for MNTN with a reusable package core. The m
 - `run`: simulation size, seed, and shares basis
 - `regime`: regime-dependent growth/margin/WACC shocks
 - `forecast`: operating forecast assumptions such as fade speed, reinvestment intensity, and dilution
+  The default config keeps a 5-year explicit forecast and also exports horizon-specific valuation summaries for 1Y, 2Y, 5Y, and a long-dated 10Y view derived from the terminal-state assumptions.
 
 ## Usage
 
@@ -74,6 +75,7 @@ The CLI writes:
 - scenario table
 - transition matrices
 - Monte Carlo summary and simulation detail
+- horizon valuation summary (1Y / 2Y / 5Y / 10Y)
 - multiples cross-check
 - tornado sensitivity
 - Sobol sensitivity tables

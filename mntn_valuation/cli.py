@@ -29,5 +29,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\n{args.company} valuation complete")
     print(results.summary_df.to_string(index=False, float_format=lambda value: f"{value:,.4f}"))
+    print("\nHorizon valuation summary")
+    print(results.horizon_summary_df.to_string(index=False, float_format=lambda value: f"{value:,.4f}"))
     print(f"\nOutputs written to {output_dir}")
     return 0

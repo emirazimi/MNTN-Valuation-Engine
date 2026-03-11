@@ -122,7 +122,9 @@ class IntegrationTests(unittest.TestCase):
         )
         results = run_valuation(inputs, run_config=fast_config)
         self.assertFalse(results.summary_df.empty)
+        self.assertFalse(results.horizon_summary_df.empty)
         self.assertIn("median", results.summary_df["Metric"].tolist())
+        self.assertIn("5Y", results.horizon_summary_df["Horizon"].tolist())
         self.assertGreater(results.summary_df.loc[results.summary_df["Metric"] == "median", "Value"].iloc[0], 0)
 
         output_dir = Path(tempfile.mkdtemp(prefix="mntn-valuation-test-"))
@@ -130,6 +132,7 @@ class IntegrationTests(unittest.TestCase):
             export_results(results, output_dir, include_plots=False)
             self.assertTrue((output_dir / "scenario_table.csv").exists())
             self.assertTrue((output_dir / "monte_carlo_summary.csv").exists())
+            self.assertTrue((output_dir / "horizon_valuation_summary.csv").exists())
             exported = pd.read_csv(output_dir / "scenario_table.csv")
             self.assertFalse(exported.empty)
         finally:

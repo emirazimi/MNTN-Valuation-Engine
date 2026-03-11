@@ -34,6 +34,27 @@ def _fade_series(start: float, end: float, periods: int, exponent: float) -> np.
     return start + (end - start) * shaped
 
 
+def _scenario_regime_path(label: str, years: int) -> list[str]:
+    if label == "Bear":
+        return ["Bear"] * min(3, years) + ["Base"] * max(0, years - min(3, years))
+    if label == "Bull":
+        bull_years = min(3, years)
+        base_years = years - bull_years
+        return ["Bull"] * bull_years + ["Base"] * base_years
+    return ["Base"] * years
+
+
+def _scenario_wacc_path(label: str, years: int) -> list[float]:
+    if label == "Bear":
+        return list(np.linspace(0.116, 0.102, years))
+    if label == "Bull":
+        midpoint = min(4, years)
+        first = np.linspace(0.094, 0.091, midpoint)
+        second = np.linspace(0.092, 0.095, years - midpoint) if years > midpoint else np.array([])
+        return list(np.concatenate([first, second]))
+    return list(np.linspace(0.101, 0.098, years))
+
+
 def build_operating_forecast(
     inputs: ValuationInputs,
     revenue0: float,
@@ -60,38 +81,52 @@ def build_operating_forecast(
     growth_adjustments = np.zeros(periods) if growth_adjustments is None else np.asarray(growth_adjustments, dtype=float)
     base_growth = _fade_series(start_growth, long_run_growth, periods, cfg.revenue_fade_exponent)
     growth_rates = np.clip(base_growth + growth_adjustments, 0.01, 0.40)
-    margin_path = np.clip(
-        _fade_series(
-            ebit_margin_start,
-            np.clip(terminal_ebit_margin + margin_end_adjustment, 0.08, 0.35),
-            periods,
-            cfg.margin_fade_exponent,
-        ),
-        0.03,
-        0.40,
+    terminal_margin = np.clip(terminal_ebit_margin + margin_end_adjustment, 0.08, 0.35)
+    terminal_capex_pct = max(cfg.capex_intensity_floor, cfg.terminal_capex_pct)
+    terminal_nwc_pct = max(cfg.nwc_intensity_floor, cfg.terminal_nwc_pct)
+    dilution_start = cfg.dilution_rate if dilution_rate is None else dilution_rate
+    dilution_path = np.maximum(
+        0.0,
+        _fade_series(dilution_start, cfg.terminal_dilution_rate, periods, cfg.dilution_fade_exponent),
     )
+
+    revenues = []
+    rev_prev = revenue0
+    for growth_rate in growth_rates:
+        revenue = rev_prev * (1 + growth_rate)
+        revenues.append(revenue)
+        rev_prev = revenue
+    revenues = np.array(revenues)
+
+    time_progress = np.linspace(0.0, 1.0, periods) ** cfg.margin_fade_exponent
+    scale_progress = (revenues / revenues[-1]) if revenues[-1] > 0 else np.ones(periods)
+    scale_progress = np.clip(scale_progress, 0.0, 1.0)
+    margin_progress = np.clip(0.55 * time_progress + 0.45 * scale_progress, 0.0, 1.0)
+    margin_path = np.clip(ebit_margin_start + (terminal_margin - ebit_margin_start) * margin_progress, 0.03, 0.40)
+
+    capex_fade = _fade_series(capex_base_pct, terminal_capex_pct, periods, cfg.capex_fade_exponent)
     capex_pct_path = np.maximum(
         cfg.capex_intensity_floor,
-        capex_base_pct + cfg.capex_growth_sensitivity * np.maximum(growth_rates - long_run_growth, 0.0),
+        capex_fade + cfg.capex_growth_sensitivity * np.maximum(growth_rates - long_run_growth, 0.0),
     )
+    nwc_fade = _fade_series(nwc_base_pct, terminal_nwc_pct, periods, cfg.nwc_fade_exponent)
     nwc_pct_path = np.maximum(
         cfg.nwc_intensity_floor,
-        nwc_base_pct + cfg.nwc_growth_sensitivity * np.maximum(growth_rates - long_run_growth, 0.0),
+        nwc_fade + cfg.nwc_growth_sensitivity * np.maximum(growth_rates - long_run_growth, 0.0),
     )
-    dilution_rate = cfg.dilution_rate if dilution_rate is None else dilution_rate
 
     rows = []
     rev_prev = revenue0
     shares_prev = shares_start
     for idx in range(periods):
-        revenue = rev_prev * (1 + growth_rates[idx])
+        revenue = revenues[idx]
         ebit = revenue * margin_path[idx]
         nopat = ebit * (1 - cfg.tax_rate)
         d_and_a = revenue * d_and_a_pct
         capex = revenue * capex_pct_path[idx]
         delta_nwc = nwc_pct_path[idx] * max(revenue - rev_prev, 0.0)
         fcff = nopat + d_and_a - capex - delta_nwc
-        shares = shares_prev * (1 + dilution_rate)
+        shares = shares_prev * (1 + dilution_path[idx])
         rows.append(
             {
                 "year": idx + 1,
@@ -108,6 +143,7 @@ def build_operating_forecast(
                 "delta_nwc": delta_nwc,
                 "fcff": fcff,
                 "wacc": regime_wacc_path[idx],
+                "dilution_rate": dilution_path[idx],
                 "shares": shares,
                 "terminal_growth": terminal_growth,
             }
@@ -440,6 +476,7 @@ def dcf_from_operating_forecast(
 def run_scenario_table_calibrated(inputs: ValuationInputs, priors: dict[str, dict[str, float]], shares: float) -> tuple[pd.DataFrame, dict[str, dict[str, np.ndarray | float]]]:
     metrics = _company_metrics(inputs)
     snapshot = inputs.snapshot
+    years = inputs.forecast_config.projection_years
     g = priors["long_run_growth"]
     m = priors["terminal_ebit_margin"]
     d = priors["d_and_a_pct"]
@@ -457,8 +494,8 @@ def run_scenario_table_calibrated(inputs: ValuationInputs, priors: dict[str, dic
             "capex_pct": min(0.10, c["mu"] + 0.005),
             "nwc_pct": max(0.0, n["mu"] + 0.01),
             "terminal_growth": tg["low"],
-            "regime_path": ["Bear", "Bear", "Base", "Base", "Base"],
-            "regime_wacc_path": [0.116, 0.115, 0.109, 0.106, 0.104],
+            "regime_path": _scenario_regime_path("Bear", years),
+            "regime_wacc_path": _scenario_wacc_path("Bear", years),
         },
         "Base": {
             "start_growth": metrics["company_anchor_growth"],
@@ -469,8 +506,8 @@ def run_scenario_table_calibrated(inputs: ValuationInputs, priors: dict[str, dic
             "capex_pct": c["mu"],
             "nwc_pct": max(0.0, n["mu"]),
             "terminal_growth": tg["mu"],
-            "regime_path": ["Base", "Base", "Base", "Base", "Base"],
-            "regime_wacc_path": [0.101, 0.100, 0.100, 0.099, 0.099],
+            "regime_path": _scenario_regime_path("Base", years),
+            "regime_wacc_path": _scenario_wacc_path("Base", years),
         },
         "Bull": {
             "start_growth": min(0.40, metrics["company_anchor_growth"] + 0.05),
@@ -481,8 +518,8 @@ def run_scenario_table_calibrated(inputs: ValuationInputs, priors: dict[str, dic
             "capex_pct": max(0.0, c["mu"] - 0.002),
             "nwc_pct": max(0.0, n["mu"] - 0.003),
             "terminal_growth": tg["high"],
-            "regime_path": ["Bull", "Bull", "Bull", "Base", "Base"],
-            "regime_wacc_path": [0.094, 0.093, 0.092, 0.093, 0.094],
+            "regime_path": _scenario_regime_path("Bull", years),
+            "regime_wacc_path": _scenario_wacc_path("Bull", years),
         },
     }
 
@@ -583,11 +620,10 @@ def build_mc_valuation_paths_rolling_terminal(
     d_and_a_draws: np.ndarray,
     capex_draws: np.ndarray,
     nwc_draws: np.ndarray,
+    share_paths: np.ndarray,
     terminal_growth_draws: np.ndarray,
     tax_rate: float = 0.25,
-    shares: float | None = None,
 ) -> np.ndarray:
-    shares = snapshot.shares_outstanding if shares is None else shares
     n_sims, n_years = growth_paths.shape
     valuation_paths = np.zeros((n_sims, n_years))
     for i in range(n_sims):
@@ -609,9 +645,52 @@ def build_mc_valuation_paths_rolling_terminal(
             terminal_value_t = terminal_fcff / (terminal_wacc - terminal_growth_draws[i])
             terminal_pv_t = terminal_value_t / running_discount
             equity_value_t = cumulative_pv + terminal_pv_t + snapshot.cash_2025 - snapshot.debt_2025
-            valuation_paths[i, t] = equity_value_t / shares
+            valuation_paths[i, t] = equity_value_t / share_paths[i, t]
             rev_prev = rev_t
     return valuation_paths
+
+
+def build_horizon_summary(
+    valuation_paths: np.ndarray,
+    current_price: float,
+    terminal_growth_draws: np.ndarray,
+    terminal_dilution_rate: float,
+) -> pd.DataFrame:
+    horizon_map = {"1Y": 1, "2Y": 2, "5Y": 5}
+    rows = []
+    max_horizon = valuation_paths.shape[1]
+    for label, horizon in horizon_map.items():
+        if horizon > max_horizon:
+            continue
+        values = valuation_paths[:, horizon - 1]
+        rows.append(
+            {
+                "Horizon": label,
+                "mean": values.mean(),
+                "median": np.median(values),
+                "p10": np.percentile(values, 10),
+                "p25": np.percentile(values, 25),
+                "p75": np.percentile(values, 75),
+                "p90": np.percentile(values, 90),
+                "prob_above_current": np.mean(values > current_price),
+            }
+        )
+    if max_horizon >= 5:
+        extension_factor = ((1 + terminal_growth_draws) / (1 + terminal_dilution_rate)) ** 5
+        values_10y = valuation_paths[:, 4] * extension_factor
+        rows.append(
+            {
+                "Horizon": "10Y",
+                "mean": values_10y.mean(),
+                "median": np.median(values_10y),
+                "p10": np.percentile(values_10y, 10),
+                "p25": np.percentile(values_10y, 25),
+                "p75": np.percentile(values_10y, 75),
+                "p90": np.percentile(values_10y, 90),
+                "prob_above_current": np.mean(values_10y > current_price),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, dict[str, float]], shares: float) -> dict[str, object]:
@@ -655,6 +734,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
     all_wacc_paths = []
     all_growth_paths = []
     all_margin_paths = []
+    all_share_paths = []
     jump_counts = np.zeros(run_config.n_sims)
     long_run_growth_draws = np.zeros(run_config.n_sims)
     terminal_margin_draws = np.zeros(run_config.n_sims)
@@ -726,12 +806,15 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         all_wacc_paths.append(regime_wacc_path)
         all_growth_paths.append(forecast_df["growth_rate"].to_numpy())
         all_margin_paths.append(forecast_df["ebit_margin"].to_numpy())
+        all_share_paths.append(forecast_df["shares"].to_numpy())
         jump_counts[i] = jump_total
 
     all_regime_paths = np.array(all_regime_paths)
     all_wacc_paths = np.array(all_wacc_paths)
     all_growth_paths = np.array(all_growth_paths)
     all_margin_paths = np.array(all_margin_paths)
+    all_share_paths = np.array(all_share_paths)
+    horizon_5_idx = min(4, years - 1)
 
     simulation_df = pd.DataFrame(
         {
@@ -740,13 +823,13 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
             "end_regime": all_regime_paths[:, -1],
             "avg_wacc": np.mean(all_wacc_paths, axis=1),
             "year1_wacc": all_wacc_paths[:, 0],
-            "year5_wacc": all_wacc_paths[:, -1],
+            "year5_wacc": all_wacc_paths[:, horizon_5_idx],
             "avg_growth": np.mean(all_growth_paths, axis=1),
             "year1_growth": all_growth_paths[:, 0],
-            "year5_growth": all_growth_paths[:, -1],
+            "year5_growth": all_growth_paths[:, horizon_5_idx],
             "avg_margin": np.mean(all_margin_paths, axis=1),
             "year1_margin": all_margin_paths[:, 0],
-            "year5_margin": all_margin_paths[:, -1],
+            "year5_margin": all_margin_paths[:, horizon_5_idx],
             "jump_count": jump_counts,
             "long_run_growth_draw": long_run_growth_draws,
             "terminal_margin_draw": terminal_margin_draws,
@@ -754,6 +837,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
             "capex_pct_draw": capex_draws,
             "nwc_pct_draw": nwc_draws,
             "terminal_growth_draw": terminal_growth_draws,
+            "ending_shares": all_share_paths[:, -1],
             "upside_downside": values / snapshot.current_price - 1,
         }
     )
@@ -792,8 +876,14 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         d_and_a_draws=d_and_a_draws,
         capex_draws=capex_draws,
         nwc_draws=nwc_draws,
+        share_paths=all_share_paths,
         terminal_growth_draws=terminal_growth_draws,
-        shares=shares,
+    )
+    horizon_summary_df = build_horizon_summary(
+        valuation_paths,
+        snapshot.current_price,
+        terminal_growth_draws,
+        inputs.forecast_config.terminal_dilution_rate,
     )
     return {
         "state_df": state_df,
@@ -802,6 +892,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         "start_probs_df": start_probs_df,
         "summary_df": summary_df,
         "simulation_df": simulation_df,
+        "horizon_summary_df": horizon_summary_df,
         "ending_regime_df": ending_regime_df,
         "driver_corr_df": driver_corr_df,
         "multiples_df": multiples_df,
@@ -810,6 +901,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         "growth_paths": all_growth_paths,
         "margin_paths": all_margin_paths,
         "wacc_paths": all_wacc_paths,
+        "share_paths": all_share_paths,
         "valuation_paths": valuation_paths,
     }
 
@@ -817,6 +909,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
 def run_tornado_sensitivity_calibrated(inputs: ValuationInputs, priors: dict[str, dict[str, float]], shares: float) -> pd.DataFrame:
     snapshot = inputs.snapshot
     metrics = _company_metrics(inputs)
+    years = inputs.forecast_config.projection_years
     base_case = {
         "start_growth": metrics["company_anchor_growth"],
         "long_run_growth": priors["long_run_growth"]["mu"],
@@ -825,8 +918,8 @@ def run_tornado_sensitivity_calibrated(inputs: ValuationInputs, priors: dict[str
         "d_and_a_pct": priors["d_and_a_pct"]["mu"],
         "capex_pct": priors["capex_pct"]["mu"],
         "nwc_pct": max(0.0, priors["nwc_pct"]["mu"]),
-        "regime_path": ["Base", "Base", "Base", "Base", "Base"],
-        "regime_wacc_path": [0.101, 0.100, 0.100, 0.099, 0.099],
+        "regime_path": _scenario_regime_path("Base", years),
+        "regime_wacc_path": _scenario_wacc_path("Base", years),
         "terminal_growth": priors["terminal_growth"]["mu"],
     }
     base_forecast = build_operating_forecast(
@@ -851,7 +944,7 @@ def run_tornado_sensitivity_calibrated(inputs: ValuationInputs, priors: dict[str
         "Terminal EBIT Margin": {"low": priors["terminal_ebit_margin"]["low"], "high": priors["terminal_ebit_margin"]["high"]},
         "Capex % Revenue": {"low": priors["capex_pct"]["low"], "high": priors["capex_pct"]["high"]},
         "NWC % Incremental Rev": {"low": max(0.0, priors["nwc_pct"]["low"]), "high": max(0.0, priors["nwc_pct"]["high"])},
-        "WACC Path": {"low": [0.093, 0.093, 0.092, 0.092, 0.091], "high": [0.109, 0.108, 0.107, 0.106, 0.105]},
+        "WACC Path": {"low": list(np.linspace(0.093, 0.091, years)), "high": list(np.linspace(0.109, 0.105, years))},
         "Terminal Growth": {"low": priors["terminal_growth"]["low"], "high": priors["terminal_growth"]["high"]},
     }
     rows = []
@@ -1093,6 +1186,7 @@ def run_valuation(inputs: ValuationInputs, run_config=None) -> ValuationResults:
         macro_transition_df=mc["macro_transition_df"],
         summary_df=mc["summary_df"],
         simulation_df=mc["simulation_df"],
+        horizon_summary_df=mc["horizon_summary_df"],
         ending_regime_df=mc["ending_regime_df"],
         driver_corr_df=mc["driver_corr_df"],
         multiples_df=mc["multiples_df"],
@@ -1104,5 +1198,6 @@ def run_valuation(inputs: ValuationInputs, run_config=None) -> ValuationResults:
         growth_paths=mc["growth_paths"],
         margin_paths=mc["margin_paths"],
         wacc_paths=mc["wacc_paths"],
+        share_paths=mc["share_paths"],
         valuation_paths=mc["valuation_paths"],
     )
