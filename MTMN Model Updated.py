@@ -1528,6 +1528,16 @@ if __name__ == "__main__":
     print("\nSOBOL SENSITIVITY ANALYSIS")
     print(sobol_df.to_string(index=False, float_format=lambda x: f"{x:,.4f}"))
 
+    structural_sobol_problem, structural_sobol_params, structural_sobol_Y, structural_sobol_Si, structural_sobol_df = run_structural_sobol_sensitivity(
+        priors=priors,
+        comp_panel=comp_panel,
+        mntn_hist=mntn_hist,
+        n_base=1024
+    )
+
+    print("\nSTRUCTURAL SOBOL SENSITIVITY ANALYSIS")
+    print(structural_sobol_df.to_string(index=False, float_format=lambda x: f"{x:,.4f}"))
+
     # Optional exports (AI did this part) - uncomment if needed
     # comp_panel.to_csv("comp_panel.csv", index=False)
     # peer_multiples_df.to_csv("peer_multiples.csv", index=False)
@@ -1550,4 +1560,11 @@ if __name__ == "__main__":
     plot_mc_fan_chart(results["valuation_paths"])
     plot_sobol_indices(sobol_df)
     plot_sobol_response_scatter(sobol_params, sobol_Y, sobol_problem, top_k=3)
+    plot_sobol_indices(structural_sobol_df)
+    plot_sobol_response_scatter(
+        structural_sobol_params,
+        structural_sobol_Y,
+        structural_sobol_problem,
+        top_k=3
+    )
 

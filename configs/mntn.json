@@ -1,0 +1,47 @@
+{
+  "run": {
+    "n_sims": 3000,
+    "seed": 42,
+    "macro_stress_level": 0.5,
+    "shrinkage": 0.65,
+    "sobol_n_base": 128,
+    "structural_sobol_n_base": 64,
+    "shares_basis": "basic",
+    "include_plots": true
+  },
+  "regime": {
+    "regime_wacc_base": {
+      "Bear": 0.118,
+      "Base": 0.1,
+      "Bull": 0.091
+    },
+    "regime_growth_shift": {
+      "Bear": -0.05,
+      "Base": 0.0,
+      "Bull": 0.04
+    },
+    "regime_margin_shift": {
+      "Bear": -0.025,
+      "Base": 0.0,
+      "Bull": 0.02
+    },
+    "jump_params": {
+      "annual_prob": 0.1,
+      "growth_jump_mean": -0.04,
+      "growth_jump_std": 0.015,
+      "margin_jump_mean": -0.015,
+      "margin_jump_std": 0.007
+    }
+  },
+  "forecast": {
+    "projection_years": 5,
+    "tax_rate": 0.25,
+    "revenue_fade_exponent": 1.35,
+    "margin_fade_exponent": 1.15,
+    "capex_intensity_floor": 0.02,
+    "capex_growth_sensitivity": 0.08,
+    "nwc_intensity_floor": 0.0,
+    "nwc_growth_sensitivity": 0.06,
+    "dilution_rate": 0.015
+  }
+}
