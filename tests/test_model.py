@@ -107,10 +107,11 @@ class ModelTests(unittest.TestCase):
 class IntegrationTests(unittest.TestCase):
     def test_load_inputs_and_priors(self) -> None:
         inputs = load_inputs("MNTN", DATA_DIR, CONFIG_PATH)
-        priors = fit_empirical_bayes_priors(inputs.peer_panel.data)
+        priors = fit_empirical_bayes_priors(inputs, inputs.peer_panel.data)
         self.assertEqual(inputs.snapshot.company_id, "MNTN")
         self.assertIn("long_run_growth", priors)
         self.assertEqual(inputs.thesis_config.base.name, "Base")
+        self.assertGreater(inputs.math_config.growth_mean_reversion, 0)
 
     def test_end_to_end_run_and_export(self) -> None:
         inputs = load_inputs("MNTN", DATA_DIR, CONFIG_PATH)

@@ -36,6 +36,7 @@ Data-backed Python valuation engine for MNTN with a reusable package core. The m
   The default config keeps a 5-year explicit forecast and also exports horizon-specific valuation summaries for 1Y, 2Y, 5Y, and a long-dated 10Y view derived from the terminal-state assumptions.
   The share-count bridge now separates residual dilution, SBC-driven issuance, and unwind of the current basic-to-diluted overhang.
 - `thesis`: explicit bear/base/bull operating cases that shape the medium-term MNTN story instead of relying only on generic parameter spreads
+- `math`: advanced stochastic settings for weighted peer priors, latent-factor simulation, and mean-reverting operating paths
 
 ## Usage
 

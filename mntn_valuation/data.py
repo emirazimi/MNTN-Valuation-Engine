@@ -9,6 +9,7 @@ from .types import (
     CompanySnapshot,
     ForecastConfig,
     HistoricalSeries,
+    MathConfig,
     PeerMultiples,
     PeerPanel,
     RegimeConfig,
@@ -82,19 +83,20 @@ def _load_thesis_config(raw: dict) -> ThesisConfig:
     )
 
 
-def load_run_config(config_path: Path) -> tuple[ValuationRunConfig, RegimeConfig, ForecastConfig, ThesisConfig]:
+def load_run_config(config_path: Path) -> tuple[ValuationRunConfig, RegimeConfig, ForecastConfig, ThesisConfig, MathConfig]:
     raw = _load_json(config_path)
     run_cfg = ValuationRunConfig(**raw["run"])
     regime_cfg = RegimeConfig(**raw["regime"])
     forecast_cfg = ForecastConfig(**raw["forecast"])
     thesis_cfg = _load_thesis_config(raw["thesis"])
-    return run_cfg, regime_cfg, forecast_cfg, thesis_cfg
+    math_cfg = MathConfig(**raw["math"])
+    return run_cfg, regime_cfg, forecast_cfg, thesis_cfg, math_cfg
 
 
 def load_inputs(company_id: str, data_dir: str | Path, config_path: str | Path) -> ValuationInputs:
     data_dir = Path(data_dir)
     config_path = Path(config_path)
-    run_config, regime_config, forecast_config, thesis_config = load_run_config(config_path)
+    run_config, regime_config, forecast_config, thesis_config, math_config = load_run_config(config_path)
     return ValuationInputs(
         company_id=company_id,
         snapshot=load_company_snapshot(company_id, data_dir),
@@ -104,6 +106,7 @@ def load_inputs(company_id: str, data_dir: str | Path, config_path: str | Path) 
         regime_config=regime_config,
         forecast_config=forecast_config,
         thesis_config=thesis_config,
+        math_config=math_config,
         run_config=run_config,
         config_path=config_path,
         data_dir=data_dir,

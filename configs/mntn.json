@@ -92,5 +92,28 @@
       "residual_dilution_adjustment": 0.004,
       "regime_label": "Bear"
     }
+  },
+  "math": {
+    "peer_recency_half_life_quarters": 8.0,
+    "peer_relevance_strength": 5.0,
+    "hierarchical_shrinkage": 0.55,
+    "growth_mean_reversion": 0.45,
+    "margin_mean_reversion": 0.40,
+    "factor_persistence": 0.50,
+    "macro_factor_vol": 0.90,
+    "execution_factor_vol": 0.70,
+    "capital_factor_vol": 0.55,
+    "idiosyncratic_growth_vol": 0.03,
+    "idiosyncratic_margin_vol": 0.015,
+    "growth_factor_loadings": {
+      "macro": 0.035,
+      "execution": 0.025,
+      "capital": -0.010
+    },
+    "margin_factor_loadings": {
+      "macro": 0.008,
+      "execution": 0.015,
+      "capital": -0.006
+    }
   }
 }

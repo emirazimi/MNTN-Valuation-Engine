@@ -95,6 +95,23 @@ class ThesisConfig:
 
 
 @dataclass(frozen=True)
+class MathConfig:
+    peer_recency_half_life_quarters: float
+    peer_relevance_strength: float
+    hierarchical_shrinkage: float
+    growth_mean_reversion: float
+    margin_mean_reversion: float
+    factor_persistence: float
+    macro_factor_vol: float
+    execution_factor_vol: float
+    capital_factor_vol: float
+    idiosyncratic_growth_vol: float
+    idiosyncratic_margin_vol: float
+    growth_factor_loadings: dict[str, float]
+    margin_factor_loadings: dict[str, float]
+
+
+@dataclass(frozen=True)
 class ValuationRunConfig:
     n_sims: int = 30000
     seed: int = 42
@@ -121,6 +138,7 @@ class ValuationInputs:
     regime_config: RegimeConfig
     forecast_config: ForecastConfig
     thesis_config: ThesisConfig
+    math_config: MathConfig
     run_config: ValuationRunConfig
     config_path: Path
     data_dir: Path

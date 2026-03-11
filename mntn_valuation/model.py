@@ -127,6 +127,8 @@ def build_operating_forecast(
     growth_adjustments: list[float] | None = None,
     margin_end_adjustment: float = 0.0,
     dilution_rate: float | None = None,
+    growth_path_override: np.ndarray | None = None,
+    margin_path_override: np.ndarray | None = None,
 ) -> pd.DataFrame:
     cfg = inputs.forecast_config
     periods = cfg.projection_years
@@ -134,8 +136,11 @@ def build_operating_forecast(
         raise ValueError("Regime path and WACC path must match projection years.")
 
     growth_adjustments = np.zeros(periods) if growth_adjustments is None else np.asarray(growth_adjustments, dtype=float)
-    base_growth = _fade_series(start_growth, long_run_growth, periods, cfg.revenue_fade_exponent)
-    growth_rates = np.clip(base_growth + growth_adjustments, 0.01, 0.40)
+    if growth_path_override is None:
+        base_growth = _fade_series(start_growth, long_run_growth, periods, cfg.revenue_fade_exponent)
+        growth_rates = np.clip(base_growth + growth_adjustments, 0.01, 0.40)
+    else:
+        growth_rates = np.clip(np.asarray(growth_path_override, dtype=float), 0.01, 0.40)
     terminal_margin = np.clip(terminal_ebit_margin + margin_end_adjustment, 0.08, 0.35)
     terminal_capex_pct = max(cfg.capex_intensity_floor, cfg.terminal_capex_pct)
     terminal_nwc_pct = max(cfg.nwc_intensity_floor, cfg.terminal_nwc_pct)
@@ -149,11 +154,14 @@ def build_operating_forecast(
         rev_prev = revenue
     revenues = np.array(revenues)
 
-    time_progress = np.linspace(0.0, 1.0, periods) ** cfg.margin_fade_exponent
-    scale_progress = (revenues / revenues[-1]) if revenues[-1] > 0 else np.ones(periods)
-    scale_progress = np.clip(scale_progress, 0.0, 1.0)
-    margin_progress = np.clip(0.55 * time_progress + 0.45 * scale_progress, 0.0, 1.0)
-    margin_path = np.clip(ebit_margin_start + (terminal_margin - ebit_margin_start) * margin_progress, 0.03, 0.40)
+    if margin_path_override is None:
+        time_progress = np.linspace(0.0, 1.0, periods) ** cfg.margin_fade_exponent
+        scale_progress = (revenues / revenues[-1]) if revenues[-1] > 0 else np.ones(periods)
+        scale_progress = np.clip(scale_progress, 0.0, 1.0)
+        margin_progress = np.clip(0.55 * time_progress + 0.45 * scale_progress, 0.0, 1.0)
+        margin_path = np.clip(ebit_margin_start + (terminal_margin - ebit_margin_start) * margin_progress, 0.03, 0.40)
+    else:
+        margin_path = np.clip(np.asarray(margin_path_override, dtype=float), 0.03, 0.40)
 
     capex_fade = _fade_series(capex_base_pct, terminal_capex_pct, periods, cfg.capex_fade_exponent)
     capex_pct_path = np.maximum(
@@ -220,45 +228,100 @@ def winsorize_series(series: pd.Series, lower: float = 0.05, upper: float = 0.95
     return series.clip(lower=lo, upper=hi)
 
 
-def fit_empirical_bayes_priors(comp_panel: pd.DataFrame) -> dict[str, dict[str, float]]:
+def _weighted_mean(values: pd.Series, weights: pd.Series) -> float:
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    return float(np.sum(values * weights) / np.sum(weights))
+
+
+def _weighted_std(values: pd.Series, weights: pd.Series) -> float:
+    mean = _weighted_mean(values, weights)
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    var = np.sum(weights * (values - mean) ** 2) / np.sum(weights)
+    return float(np.sqrt(max(var, 1e-8)))
+
+
+def _build_peer_weights(inputs: ValuationInputs, comp_panel: pd.DataFrame) -> pd.Series:
+    cfg = inputs.math_config
+    history = inputs.history.data
+    latest = history.iloc[-1]
+    latest_quarter = comp_panel["quarter"].max()
+    quarter_delta = latest_quarter.ordinal - comp_panel["quarter"].map(lambda period: period.ordinal)
+    recency_weight = np.exp(-np.log(2) * quarter_delta / cfg.peer_recency_half_life_quarters)
+
+    peer_latest = comp_panel.sort_values(["company", "quarter"]).groupby("company").tail(1).copy()
+    peer_latest["growth_distance"] = (peer_latest["rev_growth_yoy"] - latest["rev_growth_yoy"]) ** 2
+    peer_latest["margin_distance"] = (peer_latest["ebit_margin"] - latest["ebit_margin"]) ** 2
+    peer_latest["fcff_distance"] = (peer_latest["fcff_margin"] - latest["fcff_margin"]) ** 2
+    peer_latest["relevance_weight"] = np.exp(
+        -cfg.peer_relevance_strength
+        * (peer_latest["growth_distance"] + 0.75 * peer_latest["margin_distance"] + 0.50 * peer_latest["fcff_distance"])
+    )
+    relevance = peer_latest.set_index("company")["relevance_weight"]
+    weights = recency_weight * comp_panel["company"].map(relevance).fillna(1.0)
+    return pd.Series(weights, index=comp_panel.index, dtype=float)
+
+
+def fit_empirical_bayes_priors(inputs: ValuationInputs, comp_panel: pd.DataFrame) -> dict[str, dict[str, float]]:
     df = comp_panel.copy()
     cols = ["rev_growth_yoy", "ebit_margin", "d_and_a_pct", "capex_pct", "nwc_pct"]
     for col in cols:
         df[col] = winsorize_series(df[col])
+    weights = _build_peer_weights(inputs, df)
+    shrink = inputs.math_config.hierarchical_shrinkage
+
+    company_agg = (
+        df.assign(weight=weights)
+        .groupby("company")
+        .apply(
+            lambda grp: pd.Series(
+                {
+                    "rev_growth_yoy": _weighted_mean(grp["rev_growth_yoy"], grp["weight"]),
+                    "ebit_margin": _weighted_mean(grp["ebit_margin"], grp["weight"]),
+                    "d_and_a_pct": _weighted_mean(grp["d_and_a_pct"], grp["weight"]),
+                    "capex_pct": _weighted_mean(grp["capex_pct"], grp["weight"]),
+                    "nwc_pct": _weighted_mean(grp["nwc_pct"], grp["weight"]),
+                    "weight": grp["weight"].sum(),
+                }
+            )
+        )
+        .reset_index()
+    )
 
     priors = {
         "long_run_growth": {
-            "mu": df["rev_growth_yoy"].mean(),
-            "sigma": max(df["rev_growth_yoy"].std(), 1e-4),
-            "low": df["rev_growth_yoy"].quantile(0.05),
-            "high": df["rev_growth_yoy"].quantile(0.95),
+            "mu": shrink * _weighted_mean(df["rev_growth_yoy"], weights) + (1 - shrink) * _weighted_mean(company_agg["rev_growth_yoy"], company_agg["weight"]),
+            "sigma": max(shrink * _weighted_std(df["rev_growth_yoy"], weights) + (1 - shrink) * _weighted_std(company_agg["rev_growth_yoy"], company_agg["weight"]), 1e-4),
+            "low": float(df["rev_growth_yoy"].quantile(0.05)),
+            "high": float(df["rev_growth_yoy"].quantile(0.95)),
         },
         "terminal_ebit_margin": {
-            "mu": df["ebit_margin"].mean(),
-            "sigma": max(df["ebit_margin"].std(), 1e-4),
-            "low": df["ebit_margin"].quantile(0.05),
-            "high": df["ebit_margin"].quantile(0.95),
+            "mu": shrink * _weighted_mean(df["ebit_margin"], weights) + (1 - shrink) * _weighted_mean(company_agg["ebit_margin"], company_agg["weight"]),
+            "sigma": max(shrink * _weighted_std(df["ebit_margin"], weights) + (1 - shrink) * _weighted_std(company_agg["ebit_margin"], company_agg["weight"]), 1e-4),
+            "low": float(df["ebit_margin"].quantile(0.05)),
+            "high": float(df["ebit_margin"].quantile(0.95)),
         },
         "d_and_a_pct": {
-            "mu": df["d_and_a_pct"].mean(),
-            "sigma": max(df["d_and_a_pct"].std(), 1e-4),
-            "low": df["d_and_a_pct"].quantile(0.05),
-            "high": df["d_and_a_pct"].quantile(0.95),
+            "mu": shrink * _weighted_mean(df["d_and_a_pct"], weights) + (1 - shrink) * _weighted_mean(company_agg["d_and_a_pct"], company_agg["weight"]),
+            "sigma": max(shrink * _weighted_std(df["d_and_a_pct"], weights) + (1 - shrink) * _weighted_std(company_agg["d_and_a_pct"], company_agg["weight"]), 1e-4),
+            "low": float(df["d_and_a_pct"].quantile(0.05)),
+            "high": float(df["d_and_a_pct"].quantile(0.95)),
         },
         "capex_pct": {
-            "mu": df["capex_pct"].mean(),
-            "sigma": max(df["capex_pct"].std(), 1e-4),
-            "low": df["capex_pct"].quantile(0.05),
-            "high": df["capex_pct"].quantile(0.95),
+            "mu": shrink * _weighted_mean(df["capex_pct"], weights) + (1 - shrink) * _weighted_mean(company_agg["capex_pct"], company_agg["weight"]),
+            "sigma": max(shrink * _weighted_std(df["capex_pct"], weights) + (1 - shrink) * _weighted_std(company_agg["capex_pct"], company_agg["weight"]), 1e-4),
+            "low": float(df["capex_pct"].quantile(0.05)),
+            "high": float(df["capex_pct"].quantile(0.95)),
         },
         "nwc_pct": {
-            "mu": df["nwc_pct"].mean(),
-            "sigma": max(df["nwc_pct"].std(), 1e-4),
-            "low": df["nwc_pct"].quantile(0.05),
-            "high": df["nwc_pct"].quantile(0.95),
+            "mu": shrink * _weighted_mean(df["nwc_pct"], weights) + (1 - shrink) * _weighted_mean(company_agg["nwc_pct"], company_agg["weight"]),
+            "sigma": max(shrink * _weighted_std(df["nwc_pct"], weights) + (1 - shrink) * _weighted_std(company_agg["nwc_pct"], company_agg["weight"]), 1e-4),
+            "low": float(df["nwc_pct"].quantile(0.05)),
+            "high": float(df["nwc_pct"].quantile(0.95)),
         },
         "terminal_growth": {
-            "mu": min(0.03, max(0.02, 0.35 * df["rev_growth_yoy"].mean())),
+            "mu": min(0.03, max(0.02, 0.35 * _weighted_mean(df["rev_growth_yoy"], weights))),
             "sigma": 0.004,
             "low": 0.018,
             "high": 0.038,
@@ -296,6 +359,71 @@ def correlated_lhs_uniforms(n_sims: int, corr_matrix: np.ndarray, seed: int = 42
     cholesky = np.linalg.cholesky(corr_matrix)
     correlated = z @ cholesky.T
     return np.clip(stats.norm.cdf(correlated), 1e-6, 1 - 1e-6)
+
+
+def sample_latent_factor_paths(inputs: ValuationInputs, n_years: int, rng: np.random.Generator) -> dict[str, np.ndarray]:
+    cfg = inputs.math_config
+    macro = np.zeros(n_years)
+    execution = np.zeros(n_years)
+    capital = np.zeros(n_years)
+    for t in range(n_years):
+        macro_prev = macro[t - 1] if t > 0 else 0.0
+        execution_prev = execution[t - 1] if t > 0 else 0.0
+        capital_prev = capital[t - 1] if t > 0 else 0.0
+        macro[t] = cfg.factor_persistence * macro_prev + rng.normal(0.0, cfg.macro_factor_vol)
+        execution[t] = cfg.factor_persistence * execution_prev + rng.normal(0.0, cfg.execution_factor_vol)
+        capital[t] = cfg.factor_persistence * capital_prev + rng.normal(0.0, cfg.capital_factor_vol)
+    return {"macro": macro, "execution": execution, "capital": capital}
+
+
+def generate_mean_reverting_operating_paths(
+    inputs: ValuationInputs,
+    start_growth: float,
+    long_run_growth: float,
+    ebit_margin_start: float,
+    terminal_ebit_margin: float,
+    regime_path: list[str],
+    growth_adjustments: list[float],
+    margin_end_adjustment: float,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    cfg = inputs.math_config
+    n_years = len(regime_path)
+    factors = sample_latent_factor_paths(inputs, n_years, rng)
+    growth = np.zeros(n_years)
+    margin = np.zeros(n_years)
+    growth_prev = start_growth
+    margin_prev = ebit_margin_start
+    terminal_margin = np.clip(terminal_ebit_margin + margin_end_adjustment, 0.08, 0.35)
+    for t in range(n_years):
+        growth_factor = (
+            cfg.growth_factor_loadings["macro"] * factors["macro"][t]
+            + cfg.growth_factor_loadings["execution"] * factors["execution"][t]
+            + cfg.growth_factor_loadings["capital"] * factors["capital"][t]
+        )
+        margin_factor = (
+            cfg.margin_factor_loadings["macro"] * factors["macro"][t]
+            + cfg.margin_factor_loadings["execution"] * factors["execution"][t]
+            + cfg.margin_factor_loadings["capital"] * factors["capital"][t]
+        )
+        growth_t = (
+            long_run_growth
+            + (1 - cfg.growth_mean_reversion) * (growth_prev - long_run_growth)
+            + growth_factor
+            + growth_adjustments[t]
+            + rng.normal(0.0, cfg.idiosyncratic_growth_vol)
+        )
+        margin_t = (
+            terminal_margin
+            + (1 - cfg.margin_mean_reversion) * (margin_prev - terminal_margin)
+            + margin_factor
+            + rng.normal(0.0, cfg.idiosyncratic_margin_vol)
+        )
+        growth[t] = np.clip(growth_t, 0.01, 0.40)
+        margin[t] = np.clip(margin_t, 0.03, 0.40)
+        growth_prev = growth[t]
+        margin_prev = margin[t]
+    return growth, margin
 
 
 def soften_probabilities(probs: np.ndarray, temperature: float = 2.5) -> np.ndarray:
@@ -754,17 +882,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         }
     )
 
-    corr = np.array(
-        [
-            [1.00, 0.45, 0.10, 0.15, 0.10, -0.05],
-            [0.45, 1.00, 0.10, 0.10, 0.10, 0.10],
-            [0.10, 0.10, 1.00, 0.35, 0.00, 0.00],
-            [0.15, 0.10, 0.35, 1.00, 0.20, 0.00],
-            [0.10, 0.10, 0.00, 0.20, 1.00, 0.00],
-            [-0.05, 0.10, 0.00, 0.00, 0.00, 1.00],
-        ]
-    )
-    uniforms = correlated_lhs_uniforms(run_config.n_sims, corr, run_config.seed)
+    uniforms = qmc.LatinHypercube(d=6, seed=run_config.seed).random(n=run_config.n_sims)
     values = np.empty(run_config.n_sims)
     all_regime_paths = []
     all_wacc_paths = []
@@ -823,6 +941,17 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
             wacc_t = regime_cfg.regime_wacc_base[reg] + rng.normal(0.0, 0.004)
             regime_wacc_path.append(np.clip(wacc_t, 0.08, 0.14))
 
+        growth_path, margin_path = generate_mean_reverting_operating_paths(
+            inputs=inputs,
+            start_growth=thesis_start_growth,
+            long_run_growth=long_run_growth,
+            ebit_margin_start=ebit_margin_start,
+            terminal_ebit_margin=terminal_ebit_margin,
+            regime_path=regime_path,
+            growth_adjustments=growth_adjustments,
+            margin_end_adjustment=regime_cfg.regime_margin_shift[regime_path[-1]] + margin_shock_accum,
+            rng=rng,
+        )
         forecast_df = build_operating_forecast(
             inputs=inputs,
             revenue0=snapshot.revenue_2026_mid,
@@ -837,9 +966,9 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
             regime_path=regime_path,
             regime_wacc_path=regime_wacc_path,
             shares_start=shares,
-            growth_adjustments=growth_adjustments,
-            margin_end_adjustment=regime_cfg.regime_margin_shift[regime_path[-1]] + margin_shock_accum,
             dilution_rate=max(0.0, inputs.forecast_config.dilution_rate + base_case.residual_dilution_adjustment),
+            growth_path_override=growth_path,
+            margin_path_override=margin_path,
         )
         result = dcf_from_operating_forecast(forecast_df, terminal_growth, snapshot.cash_2025, snapshot.debt_2025)
 
@@ -1210,12 +1339,13 @@ def run_valuation(inputs: ValuationInputs, run_config=None) -> ValuationResults:
             regime_config=inputs.regime_config,
             forecast_config=inputs.forecast_config,
             thesis_config=inputs.thesis_config,
+            math_config=inputs.math_config,
             run_config=run_config,
             config_path=inputs.config_path,
             data_dir=inputs.data_dir,
         )
     shares = inputs.run_config.resolve_shares(inputs.snapshot)
-    priors = fit_empirical_bayes_priors(inputs.peer_panel.data)
+    priors = fit_empirical_bayes_priors(inputs, inputs.peer_panel.data)
     scenario_df, scenario_detailed = run_scenario_table_calibrated(inputs, priors, shares)
     mc = advanced_monte_carlo_empirical(inputs, priors, shares)
     tornado_df = run_tornado_sensitivity_calibrated(inputs, priors, shares)
