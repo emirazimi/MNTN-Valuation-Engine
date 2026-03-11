@@ -78,6 +78,9 @@ class ModelTests(unittest.TestCase):
         )
         self.assertEqual(len(forecast), inputs.forecast_config.projection_years)
         self.assertIn("growth_rate", forecast.columns)
+        self.assertIn("sbc_share_issuance", forecast.columns)
+        self.assertIn("overhang_release", forecast.columns)
+        self.assertGreater(forecast["sbc_share_issuance"].sum(), 0)
         self.assertGreater(forecast["shares"].iloc[-1], inputs.snapshot.shares_outstanding)
 
     def test_dcf_from_operating_forecast_positive(self) -> None:
@@ -107,6 +110,7 @@ class IntegrationTests(unittest.TestCase):
         priors = fit_empirical_bayes_priors(inputs.peer_panel.data)
         self.assertEqual(inputs.snapshot.company_id, "MNTN")
         self.assertIn("long_run_growth", priors)
+        self.assertEqual(inputs.thesis_config.base.name, "Base")
 
     def test_end_to_end_run_and_export(self) -> None:
         inputs = load_inputs("MNTN", DATA_DIR, CONFIG_PATH)
@@ -125,6 +129,9 @@ class IntegrationTests(unittest.TestCase):
         self.assertFalse(results.horizon_summary_df.empty)
         self.assertIn("median", results.summary_df["Metric"].tolist())
         self.assertIn("5Y", results.horizon_summary_df["Horizon"].tolist())
+        self.assertIn("ending_shares", results.simulation_df.columns)
+        self.assertIn("year1_sbc_shares", results.simulation_df.columns)
+        self.assertEqual(set(results.scenario_df["Scenario"].tolist()), {"Bear", "Base", "Bull"})
         self.assertGreater(results.summary_df.loc[results.summary_df["Metric"] == "median", "Value"].iloc[0], 0)
 
         output_dir = Path(tempfile.mkdtemp(prefix="mntn-valuation-test-"))

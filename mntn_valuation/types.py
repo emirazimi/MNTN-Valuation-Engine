@@ -73,6 +73,28 @@ class ForecastConfig:
 
 
 @dataclass(frozen=True)
+class ThesisCase:
+    name: str
+    start_growth_adjustment: float
+    long_run_growth_override: float | None
+    ebit_margin_start_adjustment: float
+    terminal_ebit_margin_override: float | None
+    d_and_a_pct_adjustment: float
+    capex_pct_adjustment: float
+    nwc_pct_adjustment: float
+    terminal_growth_override: float | None
+    residual_dilution_adjustment: float
+    regime_label: str
+
+
+@dataclass(frozen=True)
+class ThesisConfig:
+    base: ThesisCase
+    bull: ThesisCase
+    bear: ThesisCase
+
+
+@dataclass(frozen=True)
 class ValuationRunConfig:
     n_sims: int = 30000
     seed: int = 42
@@ -98,6 +120,7 @@ class ValuationInputs:
     peer_multiples: PeerMultiples
     regime_config: RegimeConfig
     forecast_config: ForecastConfig
+    thesis_config: ThesisConfig
     run_config: ValuationRunConfig
     config_path: Path
     data_dir: Path

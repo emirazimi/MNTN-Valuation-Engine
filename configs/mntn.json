@@ -1,6 +1,6 @@
 {
   "run": {
-    "n_sims": 3000,
+    "n_sims": 5000,
     "seed": 42,
     "macro_stress_level": 0.5,
     "shrinkage": 0.65,
@@ -54,5 +54,43 @@
     "sbc_fade_exponent": 1.1,
     "sbc_share_issuance_price_factor": 1.15,
     "overhang_years": 3
+  },
+  "thesis": {
+    "base": {
+      "start_growth_adjustment": 0.0,
+      "long_run_growth_override": null,
+      "ebit_margin_start_adjustment": 0.015,
+      "terminal_ebit_margin_override": null,
+      "d_and_a_pct_adjustment": 0.0,
+      "capex_pct_adjustment": 0.0,
+      "nwc_pct_adjustment": 0.0,
+      "terminal_growth_override": null,
+      "residual_dilution_adjustment": 0.0,
+      "regime_label": "Base"
+    },
+    "bull": {
+      "start_growth_adjustment": 0.05,
+      "long_run_growth_override": 0.14,
+      "ebit_margin_start_adjustment": 0.04,
+      "terminal_ebit_margin_override": 0.24,
+      "d_and_a_pct_adjustment": 0.0,
+      "capex_pct_adjustment": -0.002,
+      "nwc_pct_adjustment": -0.003,
+      "terminal_growth_override": 0.034,
+      "residual_dilution_adjustment": -0.003,
+      "regime_label": "Bull"
+    },
+    "bear": {
+      "start_growth_adjustment": -0.08,
+      "long_run_growth_override": 0.03,
+      "ebit_margin_start_adjustment": -0.02,
+      "terminal_ebit_margin_override": 0.09,
+      "d_and_a_pct_adjustment": 0.0,
+      "capex_pct_adjustment": 0.005,
+      "nwc_pct_adjustment": 0.01,
+      "terminal_growth_override": 0.02,
+      "residual_dilution_adjustment": 0.004,
+      "regime_label": "Bear"
+    }
   }
 }
