@@ -80,6 +80,9 @@ def _load_thesis_config(raw: dict) -> ThesisConfig:
         base=ThesisCase(name="Base", **raw["base"]),
         bull=ThesisCase(name="Bull", **raw["bull"]),
         bear=ThesisCase(name="Bear", **raw["bear"]),
+        bear_weight=raw["weights"]["bear"],
+        base_weight=raw["weights"]["base"],
+        bull_weight=raw["weights"]["bull"],
     )
 
 

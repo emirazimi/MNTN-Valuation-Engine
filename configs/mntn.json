@@ -2,8 +2,8 @@
   "run": {
     "n_sims": 5000,
     "seed": 42,
-    "macro_stress_level": 0.5,
-    "shrinkage": 0.65,
+    "macro_stress_level": 0.25,
+    "shrinkage": 0.40,
     "sobol_n_base": 128,
     "structural_sobol_n_base": 64,
     "shares_basis": "basic",
@@ -26,11 +26,16 @@
       "Bull": 0.02
     },
     "jump_params": {
-      "annual_prob": 0.1,
-      "growth_jump_mean": -0.04,
-      "growth_jump_std": 0.015,
-      "margin_jump_mean": -0.015,
-      "margin_jump_std": 0.007
+      "annual_prob": 0.18,
+      "positive_jump_prob": 0.65,
+      "growth_jump_up_mean": 0.07,
+      "growth_jump_up_std": 0.04,
+      "growth_jump_down_mean": -0.05,
+      "growth_jump_down_std": 0.02,
+      "margin_jump_up_mean": 0.018,
+      "margin_jump_up_std": 0.010,
+      "margin_jump_down_mean": -0.018,
+      "margin_jump_down_std": 0.008
     }
   },
   "forecast": {
@@ -40,44 +45,49 @@
     "margin_fade_exponent": 1.15,
     "capex_fade_exponent": 1.2,
     "nwc_fade_exponent": 1.15,
-    "dilution_fade_exponent": 1.1,
+    "dilution_fade_exponent": 1.35,
     "capex_intensity_floor": 0.02,
-    "capex_growth_sensitivity": 0.08,
+    "capex_growth_sensitivity": 0.06,
     "nwc_intensity_floor": 0.0,
-    "nwc_growth_sensitivity": 0.06,
+    "nwc_growth_sensitivity": 0.04,
     "terminal_capex_pct": 0.025,
     "terminal_nwc_pct": 0.01,
-    "dilution_rate": 0.015,
-    "terminal_dilution_rate": 0.005,
-    "sbc_pct_revenue_start": 0.06,
-    "sbc_pct_revenue_end": 0.03,
-    "sbc_fade_exponent": 1.1,
-    "sbc_share_issuance_price_factor": 1.15,
-    "overhang_years": 3
+    "dilution_rate": 0.012,
+    "terminal_dilution_rate": 0.001,
+    "sbc_pct_revenue_start": 0.04,
+    "sbc_pct_revenue_end": 0.015,
+    "sbc_fade_exponent": 1.35,
+    "sbc_share_issuance_price_factor": 1.30,
+    "overhang_years": 2
   },
   "thesis": {
-    "base": {
-      "start_growth_adjustment": 0.0,
-      "long_run_growth_override": null,
-      "ebit_margin_start_adjustment": 0.015,
-      "terminal_ebit_margin_override": null,
-      "d_and_a_pct_adjustment": 0.0,
-      "capex_pct_adjustment": 0.0,
-      "nwc_pct_adjustment": 0.0,
-      "terminal_growth_override": null,
-      "residual_dilution_adjustment": 0.0,
-      "regime_label": "Base"
+    "weights": {
+      "bear": 0.10,
+      "base": 0.45,
+      "bull": 0.45
     },
-    "bull": {
-      "start_growth_adjustment": 0.05,
-      "long_run_growth_override": 0.14,
-      "ebit_margin_start_adjustment": 0.04,
+    "base": {
+      "start_growth_adjustment": 0.06,
+      "long_run_growth_override": 0.15,
+      "ebit_margin_start_adjustment": 0.045,
       "terminal_ebit_margin_override": 0.24,
       "d_and_a_pct_adjustment": 0.0,
       "capex_pct_adjustment": -0.002,
       "nwc_pct_adjustment": -0.003,
-      "terminal_growth_override": 0.034,
-      "residual_dilution_adjustment": -0.003,
+      "terminal_growth_override": 0.035,
+      "residual_dilution_adjustment": -0.005,
+      "regime_label": "Base"
+    },
+    "bull": {
+      "start_growth_adjustment": 0.12,
+      "long_run_growth_override": 0.19,
+      "ebit_margin_start_adjustment": 0.065,
+      "terminal_ebit_margin_override": 0.29,
+      "d_and_a_pct_adjustment": 0.0,
+      "capex_pct_adjustment": -0.004,
+      "nwc_pct_adjustment": -0.005,
+      "terminal_growth_override": 0.038,
+      "residual_dilution_adjustment": -0.008,
       "regime_label": "Bull"
     },
     "bear": {
@@ -96,10 +106,10 @@
   "math": {
     "peer_recency_half_life_quarters": 8.0,
     "peer_relevance_strength": 5.0,
-    "hierarchical_shrinkage": 0.55,
-    "growth_mean_reversion": 0.45,
-    "margin_mean_reversion": 0.40,
-    "factor_persistence": 0.50,
+    "hierarchical_shrinkage": 0.30,
+    "growth_mean_reversion": 0.18,
+    "margin_mean_reversion": 0.16,
+    "factor_persistence": 0.74,
     "macro_factor_vol": 0.90,
     "execution_factor_vol": 0.70,
     "capital_factor_vol": 0.55,

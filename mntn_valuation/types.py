@@ -92,6 +92,9 @@ class ThesisConfig:
     base: ThesisCase
     bull: ThesisCase
     bear: ThesisCase
+    bear_weight: float
+    base_weight: float
+    bull_weight: float
 
 
 @dataclass(frozen=True)

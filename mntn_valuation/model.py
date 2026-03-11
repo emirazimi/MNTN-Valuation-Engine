@@ -63,6 +63,21 @@ def _thesis_cases(inputs: ValuationInputs) -> list[ThesisCase]:
     ]
 
 
+def _thesis_case_weights(inputs: ValuationInputs) -> tuple[list[ThesisCase], np.ndarray]:
+    cases = [inputs.thesis_config.bear, inputs.thesis_config.base, inputs.thesis_config.bull]
+    weights = np.array(
+        [
+            inputs.thesis_config.bear_weight,
+            inputs.thesis_config.base_weight,
+            inputs.thesis_config.bull_weight,
+        ],
+        dtype=float,
+    )
+    weights = np.clip(weights, 1e-9, None)
+    weights = weights / weights.sum()
+    return cases, weights
+
+
 def _build_share_count_bridge(
     inputs: ValuationInputs,
     revenues: np.ndarray,
@@ -465,14 +480,14 @@ def estimate_transition_matrix(state_df: pd.DataFrame) -> pd.DataFrame:
 def adjust_transition_for_macro(base_transition_df: pd.DataFrame, stress_level: float) -> pd.DataFrame:
     matrix = base_transition_df.copy()
     for state in matrix.index:
-        matrix.loc[state, "Bear"] += 0.12 * stress_level
-        matrix.loc[state, "Bull"] = max(1e-6, matrix.loc[state, "Bull"] - 0.09 * stress_level)
+        matrix.loc[state, "Bear"] += 0.06 * stress_level
+        matrix.loc[state, "Bull"] = max(1e-6, matrix.loc[state, "Bull"] - 0.03 * stress_level)
         matrix.loc[state, "Base"] = max(1e-6, matrix.loc[state, "Base"] - 0.03 * stress_level)
         matrix.loc[state] = matrix.loc[state] / matrix.loc[state].sum()
     return enforce_transition_floor(matrix)
 
 
-def cap_transition_persistence(matrix: pd.DataFrame, max_diag: float = 0.55) -> pd.DataFrame:
+def cap_transition_persistence(matrix: pd.DataFrame, max_diag: float = 0.48) -> pd.DataFrame:
     matrix = matrix.copy().astype(float)
     for state in matrix.index:
         diag_val = matrix.loc[state, state]
@@ -505,8 +520,8 @@ def infer_peer_likelihood_start_probs(
 
 
 def build_macro_start_prior(stress_level: float) -> np.ndarray:
-    bear = 0.20 + 0.25 * stress_level
-    base = 0.50 - 0.10 * stress_level
+    bear = 0.12 + 0.16 * stress_level
+    base = 0.50 - 0.04 * stress_level
     bull = 1.0 - bear - base
     prior = np.array([bear, base, bull], dtype=float)
     return prior / prior.sum()
@@ -558,8 +573,13 @@ def sample_jump_shock(rng: np.random.Generator, params: dict[str, float]) -> tup
     jump_occurs = rng.uniform() < params["annual_prob"]
     if not jump_occurs:
         return 0.0, 0.0, 0
-    growth_hit = min(-0.005, rng.normal(params["growth_jump_mean"], params["growth_jump_std"]))
-    margin_hit = min(-0.002, rng.normal(params["margin_jump_mean"], params["margin_jump_std"]))
+    positive = rng.uniform() < params["positive_jump_prob"]
+    if positive:
+        growth_hit = max(0.01, rng.normal(params["growth_jump_up_mean"], params["growth_jump_up_std"]))
+        margin_hit = max(0.003, rng.normal(params["margin_jump_up_mean"], params["margin_jump_up_std"]))
+    else:
+        growth_hit = min(-0.005, rng.normal(params["growth_jump_down_mean"], params["growth_jump_down_std"]))
+        margin_hit = min(-0.002, rng.normal(params["margin_jump_down_mean"], params["margin_jump_down_std"]))
     return growth_hit, margin_hit, 1
 
 
@@ -870,7 +890,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
     state_df = assign_empirical_states(comp_panel)
     base_transition_df = estimate_transition_matrix(state_df)
     macro_transition_df = adjust_transition_for_macro(base_transition_df, run_config.macro_stress_level)
-    macro_transition_df = cap_transition_persistence(macro_transition_df, max_diag=0.55)
+    macro_transition_df = cap_transition_persistence(macro_transition_df, max_diag=0.48)
     macro_transition_df = enforce_transition_floor(macro_transition_df)
     final_start_probs, peer_start_probs, macro_prior = build_final_start_probs(state_df, history, run_config.macro_stress_level)
     start_probs_df = pd.DataFrame(
@@ -890,6 +910,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
     all_margin_paths = []
     all_share_paths = []
     all_sbc_paths = []
+    thesis_labels = []
     jump_counts = np.zeros(run_config.n_sims)
     long_run_growth_draws = np.zeros(run_config.n_sims)
     terminal_margin_draws = np.zeros(run_config.n_sims)
@@ -899,9 +920,10 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
     terminal_growth_draws = np.zeros(run_config.n_sims)
     latest = history.iloc[-1]
     years = inputs.forecast_config.projection_years
-    base_case = inputs.thesis_config.base
+    thesis_cases, thesis_weights = _thesis_case_weights(inputs)
 
     for i in range(run_config.n_sims):
+        case = thesis_cases[int(rng.choice(len(thesis_cases), p=thesis_weights))]
         prior_growth = sample_bayesian_prior(uniforms[i, 0], priors["long_run_growth"])
         prior_margin = sample_bayesian_prior(uniforms[i, 1], priors["terminal_ebit_margin"])
         prior_dna = sample_bayesian_prior(uniforms[i, 2], priors["d_and_a_pct"])
@@ -909,14 +931,17 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         prior_nwc = sample_bayesian_prior(uniforms[i, 4], priors["nwc_pct"])
         terminal_growth = sample_bayesian_prior(uniforms[i, 5], priors["terminal_growth"])
 
-        thesis_start_growth = np.clip(metrics["company_anchor_growth"] + base_case.start_growth_adjustment, 0.01, 0.40)
-        thesis_long_run_growth = base_case.long_run_growth_override if base_case.long_run_growth_override is not None else metrics["company_anchor_growth"]
-        thesis_terminal_margin = base_case.terminal_ebit_margin_override if base_case.terminal_ebit_margin_override is not None else metrics["company_anchor_margin"]
+        thesis_start_growth = np.clip(metrics["company_anchor_growth"] + case.start_growth_adjustment, 0.01, 0.40)
+        thesis_long_run_growth = case.long_run_growth_override if case.long_run_growth_override is not None else metrics["company_anchor_growth"]
+        thesis_terminal_margin = case.terminal_ebit_margin_override if case.terminal_ebit_margin_override is not None else metrics["company_anchor_margin"]
         long_run_growth = run_config.shrinkage * prior_growth + (1 - run_config.shrinkage) * thesis_long_run_growth
         terminal_ebit_margin = run_config.shrinkage * prior_margin + (1 - run_config.shrinkage) * thesis_terminal_margin
-        d_and_a_pct = run_config.shrinkage * prior_dna + (1 - run_config.shrinkage) * metrics["company_anchor_dna"]
-        capex_pct = run_config.shrinkage * prior_capex + (1 - run_config.shrinkage) * metrics["company_anchor_capex"]
-        nwc_pct = run_config.shrinkage * prior_nwc + (1 - run_config.shrinkage) * metrics["company_anchor_nwc"]
+        d_and_a_pct = run_config.shrinkage * prior_dna + (1 - run_config.shrinkage) * max(0.0, metrics["company_anchor_dna"] + case.d_and_a_pct_adjustment)
+        capex_pct = run_config.shrinkage * prior_capex + (1 - run_config.shrinkage) * max(0.0, metrics["company_anchor_capex"] + case.capex_pct_adjustment)
+        nwc_pct = run_config.shrinkage * prior_nwc + (1 - run_config.shrinkage) * max(0.0, metrics["company_anchor_nwc"] + case.nwc_pct_adjustment)
+        terminal_growth = run_config.shrinkage * terminal_growth + (1 - run_config.shrinkage) * (
+            case.terminal_growth_override if case.terminal_growth_override is not None else priors["terminal_growth"]["mu"]
+        )
 
         long_run_growth_draws[i] = long_run_growth
         terminal_margin_draws[i] = terminal_ebit_margin
@@ -926,7 +951,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         terminal_growth_draws[i] = terminal_growth
 
         regime_path = simulate_regime_path(years, final_start_probs, macro_transition_df, rng)
-        ebit_margin_start = latest["ebit_margin"] + regime_cfg.regime_margin_shift[regime_path[0]]
+        ebit_margin_start = max(0.03, latest["ebit_margin"] + case.ebit_margin_start_adjustment + regime_cfg.regime_margin_shift[regime_path[0]])
         margin_shock_accum = 0.0
         regime_wacc_path = []
         jump_total = 0
@@ -966,7 +991,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
             regime_path=regime_path,
             regime_wacc_path=regime_wacc_path,
             shares_start=shares,
-            dilution_rate=max(0.0, inputs.forecast_config.dilution_rate + base_case.residual_dilution_adjustment),
+            dilution_rate=max(0.0, inputs.forecast_config.dilution_rate + case.residual_dilution_adjustment),
             growth_path_override=growth_path,
             margin_path_override=margin_path,
         )
@@ -979,6 +1004,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         all_margin_paths.append(forecast_df["ebit_margin"].to_numpy())
         all_share_paths.append(forecast_df["shares"].to_numpy())
         all_sbc_paths.append(forecast_df["sbc_share_issuance"].to_numpy())
+        thesis_labels.append(case.name)
         jump_counts[i] = jump_total
 
     all_regime_paths = np.array(all_regime_paths)
@@ -992,6 +1018,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
     simulation_df = pd.DataFrame(
         {
             "value_per_share": values,
+            "thesis_case": thesis_labels,
             "start_regime": all_regime_paths[:, 0],
             "end_regime": all_regime_paths[:, -1],
             "avg_wacc": np.mean(all_wacc_paths, axis=1),
@@ -1269,8 +1296,14 @@ def structural_sobol_valuation_wrapper(x: np.ndarray, inputs: ValuationInputs, p
     blended_long_run_growth = float(np.clip(blended_long_run_growth, 0.01, 0.35))
     blended_terminal_margin = float(np.clip(blended_terminal_margin, 0.08, 0.35))
     terminal_growth = float(np.clip(terminal_growth, 0.015, 0.040))
-    expected_growth_jump = jump_prob * regime_cfg.jump_params["growth_jump_mean"]
-    expected_margin_jump_total = years * jump_prob * regime_cfg.jump_params["margin_jump_mean"]
+    expected_growth_jump = jump_prob * (
+        regime_cfg.jump_params["positive_jump_prob"] * regime_cfg.jump_params["growth_jump_up_mean"]
+        + (1.0 - regime_cfg.jump_params["positive_jump_prob"]) * regime_cfg.jump_params["growth_jump_down_mean"]
+    )
+    expected_margin_jump_total = years * jump_prob * (
+        regime_cfg.jump_params["positive_jump_prob"] * regime_cfg.jump_params["margin_jump_up_mean"]
+        + (1.0 - regime_cfg.jump_params["positive_jump_prob"]) * regime_cfg.jump_params["margin_jump_down_mean"]
+    )
     growth_adjustments = [regime_cfg.regime_growth_shift[regime_path[t]] + expected_growth_jump for t in range(years)]
     base_wacc = 0.5 * (bear_wacc + bull_wacc)
     regime_wacc_map = {"Bear": float(np.clip(bear_wacc, 0.09, 0.16)), "Base": float(np.clip(base_wacc, 0.085, 0.14)), "Bull": float(np.clip(bull_wacc, 0.07, 0.12))}

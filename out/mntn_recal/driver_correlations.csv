@@ -1,0 +1,11 @@
+Variable,Correlation_to_Value
+value_per_share,1.0
+avg_margin,0.8435776635110968
+avg_growth,0.7855813668587538
+terminal_margin_draw,0.2461266056097085
+long_run_growth_draw,0.10393169582334617
+jump_count,0.10163422620503244
+terminal_growth_draw,0.08987911593079294
+nwc_pct_draw,0.0034575003803064817
+capex_pct_draw,0.0024284709715320435
+avg_wacc,-0.4210189538534184
