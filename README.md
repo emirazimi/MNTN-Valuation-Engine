@@ -74,6 +74,49 @@ Each simulated path is converted into a full operating forecast covering revenue
 
 The final outputs are designed to support investment decisions rather than only valuation mechanics. In addition to scenario analysis and Monte Carlo valuation summaries, the engine reports 1Y, 2Y, and 5Y horizon values, benchmark-relative return and alpha estimates, regime diagnostics, and simulation-level path detail. The result is a framework built to answer not only what MNTN may be worth, but what distribution of outcomes an investor is underwriting over the actual holding period.
 
+### Architecture Diagram
+
+```mermaid
+flowchart TD
+    A["Local Inputs<br/>MNTN history, snapshot, peer panel, peer multiples, config"] --> B["State Estimation Layer"]
+    B --> B1["Kalman Filters<br/>Filtered growth, margin, FCFF"]
+    B --> B2["Particle Filter<br/>Latent business quality"]
+    A --> C["Peer Calibration Layer"]
+    C --> C1["Point Similarity"]
+    C --> C2["Wasserstein Similarity"]
+    C1 --> C3["Peer Weights"]
+    C2 --> C3["Peer Weights"]
+    C3 --> D["Empirical-Bayes Priors"]
+    A --> E["Regime Layer"]
+    E --> E1["Empirical State Assignment"]
+    E1 --> E2["Transition Matrix"]
+    E2 --> E3["Macro Adjustment"]
+    E3 --> E4["HMM Smoothing"]
+    E4 --> E5["Final Regime Start Probabilities"]
+    D --> F["Joint Sampling Layer"]
+    F --> F1["t-Copula Draws"]
+    F1 --> F2["Correlated Prior Draws"]
+    B1 --> G["Operating Path Engine"]
+    B2 --> G
+    E5 --> G
+    F2 --> G
+    G --> G1["Mean Reversion"]
+    G --> G2["Latent Factors"]
+    G --> G3["Stochastic Volatility"]
+    G --> G4["Regime-Scaled Jumps"]
+    G1 --> H["Operating Forecast"]
+    G2 --> H
+    G3 --> H
+    G4 --> H
+    H --> H1["Revenue, Margin, FCFF, Shares"]
+    H1 --> I["Valuation Layer"]
+    I --> I1["DCF Path"]
+    I --> I2["Market Rerating Path"]
+    I1 --> J["Blended Horizon Value"]
+    I2 --> J
+    J --> K["Outputs<br/>Scenarios, MC summary, horizon values, return summary, sensitivities"]
+```
+
 ## Usage
 
 Run the model:
