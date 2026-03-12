@@ -4,7 +4,7 @@
     "n_sims": 5000,
     "seed": 42,
     "macro_stress_level": 0.2,
-    "shrinkage": 0.35,
+    "shrinkage": 0.15,
     "sobol_n_base": 128,
     "structural_sobol_n_base": 64,
     "shares_basis": "diluted",

@@ -3,7 +3,7 @@
     "n_sims": 5000,
     "seed": 42,
     "macro_stress_level": 0.20,
-    "shrinkage": 0.35,
+    "shrinkage": 0.15,
     "sobol_n_base": 128,
     "structural_sobol_n_base": 64,
     "shares_basis": "diluted",
@@ -11,19 +11,19 @@
   },
   "regime": {
     "regime_wacc_base": {
-      "Bear": 0.112,
-      "Base": 0.094,
-      "Bull": 0.086
+      "Bear": 0.108,
+      "Base": 0.090,
+      "Bull": 0.083
     },
     "regime_growth_shift": {
-      "Bear": -0.045,
+      "Bear": -0.040,
       "Base": 0.0,
-      "Bull": 0.030
+      "Bull": 0.035
     },
     "regime_margin_shift": {
-      "Bear": -0.018,
+      "Bear": -0.015,
       "Base": 0.0,
-      "Bull": 0.012
+      "Bull": 0.014
     },
     "jump_params": {
       "annual_prob": 0.14,
@@ -47,10 +47,10 @@
     "nwc_fade_exponent": 1.10,
     "dilution_fade_exponent": 1.20,
     "capex_intensity_floor": 0.030,
-    "capex_growth_sensitivity": 0.050,
+    "capex_growth_sensitivity": 0.042,
     "nwc_intensity_floor": 0.0,
-    "nwc_growth_sensitivity": 0.035,
-    "terminal_capex_pct": 0.035,
+    "nwc_growth_sensitivity": 0.028,
+    "terminal_capex_pct": 0.032,
     "terminal_nwc_pct": 0.010,
     "dilution_rate": 0.004,
     "terminal_dilution_rate": 0.001,
@@ -62,43 +62,43 @@
   },
   "thesis": {
     "weights": {
-      "bear": 0.18,
-      "base": 0.52,
-      "bull": 0.30
+      "bear": 0.12,
+      "base": 0.53,
+      "bull": 0.35
     },
     "base": {
-      "start_growth_adjustment": 0.015,
-      "long_run_growth_override": 0.170,
-      "ebit_margin_start_adjustment": 0.010,
-      "terminal_ebit_margin_override": 0.155,
+      "start_growth_adjustment": 0.030,
+      "long_run_growth_override": 0.190,
+      "ebit_margin_start_adjustment": 0.015,
+      "terminal_ebit_margin_override": 0.180,
       "d_and_a_pct_adjustment": 0.000,
       "capex_pct_adjustment": -0.002,
       "nwc_pct_adjustment": -0.001,
-      "terminal_growth_override": 0.032,
+      "terminal_growth_override": 0.035,
       "residual_dilution_adjustment": -0.001,
       "regime_label": "Base"
     },
     "bull": {
-      "start_growth_adjustment": 0.040,
-      "long_run_growth_override": 0.205,
-      "ebit_margin_start_adjustment": 0.018,
-      "terminal_ebit_margin_override": 0.180,
+      "start_growth_adjustment": 0.060,
+      "long_run_growth_override": 0.225,
+      "ebit_margin_start_adjustment": 0.024,
+      "terminal_ebit_margin_override": 0.205,
       "d_and_a_pct_adjustment": 0.000,
       "capex_pct_adjustment": -0.003,
       "nwc_pct_adjustment": -0.002,
-      "terminal_growth_override": 0.036,
+      "terminal_growth_override": 0.038,
       "residual_dilution_adjustment": -0.002,
       "regime_label": "Bull"
     },
     "bear": {
-      "start_growth_adjustment": -0.055,
-      "long_run_growth_override": 0.075,
-      "ebit_margin_start_adjustment": -0.015,
-      "terminal_ebit_margin_override": 0.105,
+      "start_growth_adjustment": -0.040,
+      "long_run_growth_override": 0.095,
+      "ebit_margin_start_adjustment": -0.012,
+      "terminal_ebit_margin_override": 0.115,
       "d_and_a_pct_adjustment": 0.000,
       "capex_pct_adjustment": 0.004,
       "nwc_pct_adjustment": 0.004,
-      "terminal_growth_override": 0.022,
+      "terminal_growth_override": 0.024,
       "residual_dilution_adjustment": 0.001,
       "regime_label": "Bear"
     }
@@ -106,7 +106,7 @@
   "math": {
     "peer_recency_half_life_quarters": 8.0,
     "peer_relevance_strength": 4.0,
-    "hierarchical_shrinkage": 0.28,
+    "hierarchical_shrinkage": 0.20,
     "wasserstein_blend": 0.50,
     "kalman_observation_var": 0.008,
     "kalman_state_var": 0.003,
@@ -116,8 +116,8 @@
     "particle_state_std": 0.08,
     "particle_obs_scale": 0.05,
     "copula_df": 8.0,
-    "growth_mean_reversion": 0.22,
-    "margin_mean_reversion": 0.20,
+    "growth_mean_reversion": 0.18,
+    "margin_mean_reversion": 0.17,
     "factor_persistence": 0.76,
     "macro_factor_vol": 0.70,
     "execution_factor_vol": 0.55,
@@ -150,19 +150,19 @@
   },
   "market": {
     "benchmark_cagr": 0.08,
-    "dcf_weight_year1": 0.45,
-    "dcf_weight_year2": 0.60,
-    "dcf_weight_year5": 0.80,
+    "dcf_weight_year1": 0.70,
+    "dcf_weight_year2": 0.82,
+    "dcf_weight_year5": 0.95,
     "revenue_multiple_weight": 0.50,
     "ebitda_multiple_weight": 0.50,
-    "small_cap_upside_bias": 0.03,
-    "small_cap_rerating_vol": 0.10,
+    "small_cap_upside_bias": 0.01,
+    "small_cap_rerating_vol": 0.06,
     "rerating_floor": 0.80,
     "rerating_cap": 1.55,
     "thesis_rerating_multiplier": {
-      "Bear": 0.90,
-      "Base": 1.05,
-      "Bull": 1.18
+      "Bear": 0.94,
+      "Base": 1.08,
+      "Bull": 1.20
     },
     "regime_rerating_multiplier": {
       "Bear": 0.92,
