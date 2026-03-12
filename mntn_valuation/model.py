@@ -14,6 +14,7 @@ from .types import ThesisCase, ValuationInputs, ValuationResults
 
 def _company_metrics(inputs: ValuationInputs) -> dict[str, float]:
     snapshot = inputs.snapshot
+    filtered_state = build_filtered_history_state(inputs.history.data, inputs.math_config)
     return {
         "current_price": snapshot.current_price,
         "ebit_margin_2025": snapshot.ebit_2025 / snapshot.revenue_2025,
@@ -23,6 +24,10 @@ def _company_metrics(inputs: ValuationInputs) -> dict[str, float]:
         "company_anchor_dna": snapshot.d_and_a_2025 / snapshot.revenue_2025,
         "company_anchor_capex": snapshot.capex_2025 / snapshot.revenue_2025,
         "company_anchor_nwc": 0.040,
+        "filtered_growth": filtered_state["filtered_growth"],
+        "filtered_margin": filtered_state["filtered_margin"],
+        "latent_quality": filtered_state["latent_quality"],
+        "particle_quality": filtered_state["particle_quality"],
     }
 
 
@@ -257,21 +262,140 @@ def _weighted_std(values: pd.Series, weights: pd.Series) -> float:
     return float(np.sqrt(max(var, 1e-8)))
 
 
+def _zscore(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    std = np.std(values)
+    if std < 1e-8:
+        return np.zeros_like(values)
+    return (values - np.mean(values)) / std
+
+
+def kalman_filter_series(values: pd.Series | np.ndarray, observation_var: float, state_var: float) -> tuple[np.ndarray, np.ndarray]:
+    observations = np.asarray(values, dtype=float)
+    means = np.zeros_like(observations)
+    variances = np.zeros_like(observations)
+    mean = observations[0]
+    variance = 1.0
+    for i, obs in enumerate(observations):
+        pred_mean = mean
+        pred_variance = variance + state_var
+        kalman_gain = pred_variance / (pred_variance + observation_var)
+        mean = pred_mean + kalman_gain * (obs - pred_mean)
+        variance = (1 - kalman_gain) * pred_variance
+        means[i] = mean
+        variances[i] = variance
+    return means, variances
+
+
+def particle_filter_quality(observations: np.ndarray, cfg, rng: np.random.Generator) -> tuple[float, float]:
+    particles = rng.normal(observations[0], cfg.particle_state_std, size=cfg.particle_count)
+    weights = np.full(cfg.particle_count, 1 / cfg.particle_count)
+    for obs in observations:
+        particles = particles + rng.normal(0.0, cfg.particle_state_std, size=cfg.particle_count)
+        likelihood = stats.norm.pdf(obs, loc=particles, scale=max(cfg.particle_obs_scale, 1e-4))
+        weights *= np.clip(likelihood, 1e-12, None)
+        weights /= weights.sum()
+        effective_n = 1.0 / np.sum(weights**2)
+        if effective_n < cfg.particle_count / 2:
+            idx = rng.choice(cfg.particle_count, size=cfg.particle_count, p=weights)
+            particles = particles[idx]
+            weights = np.full(cfg.particle_count, 1 / cfg.particle_count)
+    mean = float(np.sum(weights * particles))
+    std = float(np.sqrt(np.sum(weights * (particles - mean) ** 2)))
+    return mean, std
+
+
+def build_filtered_history_state(history: pd.DataFrame, cfg) -> dict[str, float]:
+    growth_mu, _ = kalman_filter_series(history["rev_growth_yoy"], cfg.kalman_observation_var, cfg.kalman_state_var)
+    margin_mu, _ = kalman_filter_series(history["ebit_margin"], cfg.kalman_observation_var, cfg.kalman_state_var)
+    fcff_mu, _ = kalman_filter_series(history["fcff_margin"], cfg.kalman_observation_var, cfg.kalman_state_var)
+    quality_obs = 0.50 * _zscore(growth_mu) + 0.30 * _zscore(margin_mu) + 0.20 * _zscore(fcff_mu)
+    latent_quality_mu, _ = kalman_filter_series(quality_obs, cfg.kalman_observation_var, cfg.kalman_state_var)
+    particle_quality, particle_quality_std = particle_filter_quality(quality_obs, cfg, np.random.default_rng(123))
+    return {
+        "filtered_growth": float(growth_mu[-1]),
+        "filtered_margin": float(margin_mu[-1]),
+        "filtered_fcff": float(fcff_mu[-1]),
+        "latent_quality": float(latent_quality_mu[-1]),
+        "particle_quality": float(particle_quality),
+        "particle_quality_std": float(particle_quality_std),
+    }
+
+
+def _wasserstein_peer_similarity(inputs: ValuationInputs, comp_panel: pd.DataFrame) -> pd.Series:
+    cfg = inputs.math_config
+    history = inputs.history.data
+    history_metrics = {
+        "rev_growth_yoy": history["rev_growth_yoy"].to_numpy(),
+        "ebit_margin": history["ebit_margin"].to_numpy(),
+        "fcff_margin": history["fcff_margin"].to_numpy(),
+    }
+    similarities: dict[str, float] = {}
+    for company, grp in comp_panel.groupby("company"):
+        distances = []
+        distances.append(stats.wasserstein_distance(history_metrics["rev_growth_yoy"], grp["rev_growth_yoy"]))
+        distances.append(stats.wasserstein_distance(history_metrics["ebit_margin"], grp["ebit_margin"]))
+        distances.append(stats.wasserstein_distance(history_metrics["fcff_margin"], grp["fcff_margin"]))
+        distance = float(np.mean(distances))
+        similarities[company] = float(np.exp(-cfg.peer_relevance_strength * distance))
+    return comp_panel["company"].map(similarities).fillna(1.0)
+
+
+def _nearest_psd_corr(matrix: np.ndarray) -> np.ndarray:
+    eigvals, eigvecs = np.linalg.eigh(matrix)
+    eigvals = np.clip(eigvals, 1e-6, None)
+    psd = eigvecs @ np.diag(eigvals) @ eigvecs.T
+    scales = np.sqrt(np.diag(psd))
+    corr = psd / np.outer(scales, scales)
+    np.fill_diagonal(corr, 1.0)
+    return corr
+
+
+def build_prior_copula_corr(comp_panel: pd.DataFrame) -> np.ndarray:
+    cols = ["rev_growth_yoy", "ebit_margin", "d_and_a_pct", "capex_pct", "nwc_pct"]
+    corr_5 = comp_panel[cols].corr(method="spearman").to_numpy()
+    corr = np.eye(6)
+    corr[:5, :5] = corr_5
+    corr[5, 0] = corr[0, 5] = 0.65
+    corr[5, 1] = corr[1, 5] = 0.25
+    corr[5, 3] = corr[3, 5] = -0.20
+    corr[5, 4] = corr[4, 5] = -0.15
+    return _nearest_psd_corr(corr)
+
+
+def sample_t_copula_uniforms(n_sims: int, corr_matrix: np.ndarray, df: float, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    z = rng.multivariate_normal(np.zeros(corr_matrix.shape[0]), corr_matrix, size=n_sims)
+    chi = rng.chisquare(df, size=n_sims)
+    t_draws = z / np.sqrt(chi[:, None] / df)
+    return np.clip(stats.t.cdf(t_draws, df=df), 1e-6, 1 - 1e-6)
+
+
 def _build_peer_weights(inputs: ValuationInputs, comp_panel: pd.DataFrame) -> pd.Series:
     cfg = inputs.math_config
     history = inputs.history.data
-    latest = history.iloc[-1]
+    filtered_state = build_filtered_history_state(history, cfg)
     latest_quarter = comp_panel["quarter"].max()
     quarter_delta = latest_quarter.ordinal - comp_panel["quarter"].map(lambda period: period.ordinal)
     recency_weight = np.exp(-np.log(2) * quarter_delta / cfg.peer_recency_half_life_quarters)
 
     peer_latest = comp_panel.sort_values(["company", "quarter"]).groupby("company").tail(1).copy()
-    peer_latest["growth_distance"] = (peer_latest["rev_growth_yoy"] - latest["rev_growth_yoy"]) ** 2
-    peer_latest["margin_distance"] = (peer_latest["ebit_margin"] - latest["ebit_margin"]) ** 2
-    peer_latest["fcff_distance"] = (peer_latest["fcff_margin"] - latest["fcff_margin"]) ** 2
-    peer_latest["relevance_weight"] = np.exp(
+    peer_latest["growth_distance"] = (peer_latest["rev_growth_yoy"] - filtered_state["filtered_growth"]) ** 2
+    peer_latest["margin_distance"] = (peer_latest["ebit_margin"] - filtered_state["filtered_margin"]) ** 2
+    peer_latest["fcff_distance"] = (peer_latest["fcff_margin"] - filtered_state["filtered_fcff"]) ** 2
+    point_similarity = np.exp(
         -cfg.peer_relevance_strength
         * (peer_latest["growth_distance"] + 0.75 * peer_latest["margin_distance"] + 0.50 * peer_latest["fcff_distance"])
+    )
+    wasserstein_similarity = _wasserstein_peer_similarity(inputs, comp_panel)
+    wasserstein_latest = (
+        pd.DataFrame({"company": comp_panel["company"], "wasserstein_similarity": wasserstein_similarity})
+        .groupby("company")["wasserstein_similarity"]
+        .mean()
+    )
+    peer_latest["relevance_weight"] = (
+        (1 - cfg.wasserstein_blend) * point_similarity
+        + cfg.wasserstein_blend * peer_latest["company"].map(wasserstein_latest).fillna(1.0)
     )
     relevance = peer_latest.set_index("company")["relevance_weight"]
     weights = recency_weight * comp_panel["company"].map(relevance).fillna(1.0)
@@ -391,6 +515,36 @@ def sample_latent_factor_paths(inputs: ValuationInputs, n_years: int, rng: np.ra
     return {"macro": macro, "execution": execution, "capital": capital}
 
 
+def sample_stochastic_volatility_paths(
+    inputs: ValuationInputs,
+    regime_path: list[str],
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    cfg = inputs.math_config
+    n_years = len(regime_path)
+    growth_vol = np.zeros(n_years)
+    margin_vol = np.zeros(n_years)
+    growth_log_vol = np.log(cfg.stochastic_vol_long_run)
+    margin_log_vol = np.log(max(cfg.stochastic_vol_long_run * 0.75, 1e-4))
+    for t, regime in enumerate(regime_path):
+        regime_mult = cfg.regime_vol_multiplier.get(regime, 1.0)
+        target_growth = np.log(max(cfg.stochastic_vol_long_run * regime_mult, 1e-4))
+        target_margin = np.log(max(cfg.stochastic_vol_long_run * 0.75 * regime_mult, 1e-4))
+        growth_log_vol = (
+            growth_log_vol
+            + cfg.stochastic_vol_mean_reversion * (target_growth - growth_log_vol)
+            + rng.normal(0.0, cfg.stochastic_vol_of_vol)
+        )
+        margin_log_vol = (
+            margin_log_vol
+            + cfg.stochastic_vol_mean_reversion * (target_margin - margin_log_vol)
+            + rng.normal(0.0, cfg.stochastic_vol_of_vol * 0.75)
+        )
+        growth_vol[t] = np.exp(growth_log_vol)
+        margin_vol[t] = np.exp(margin_log_vol)
+    return growth_vol, margin_vol
+
+
 def generate_mean_reverting_operating_paths(
     inputs: ValuationInputs,
     start_growth: float,
@@ -400,11 +554,13 @@ def generate_mean_reverting_operating_paths(
     regime_path: list[str],
     growth_adjustments: list[float],
     margin_end_adjustment: float,
+    latent_quality: float,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
     cfg = inputs.math_config
     n_years = len(regime_path)
     factors = sample_latent_factor_paths(inputs, n_years, rng)
+    growth_vol_path, margin_vol_path = sample_stochastic_volatility_paths(inputs, regime_path, rng)
     growth = np.zeros(n_years)
     margin = np.zeros(n_years)
     growth_prev = start_growth
@@ -424,15 +580,17 @@ def generate_mean_reverting_operating_paths(
         growth_t = (
             long_run_growth
             + (1 - cfg.growth_mean_reversion) * (growth_prev - long_run_growth)
+            + 0.015 * latent_quality
             + growth_factor
             + growth_adjustments[t]
-            + rng.normal(0.0, cfg.idiosyncratic_growth_vol)
+            + rng.normal(0.0, cfg.idiosyncratic_growth_vol * growth_vol_path[t])
         )
         margin_t = (
             terminal_margin
             + (1 - cfg.margin_mean_reversion) * (margin_prev - terminal_margin)
+            + 0.010 * latent_quality
             + margin_factor
-            + rng.normal(0.0, cfg.idiosyncratic_margin_vol)
+            + rng.normal(0.0, cfg.idiosyncratic_margin_vol * margin_vol_path[t])
         )
         growth[t] = np.clip(growth_t, 0.01, 0.40)
         margin[t] = np.clip(margin_t, 0.03, 0.40)
@@ -475,6 +633,54 @@ def estimate_transition_matrix(state_df: pd.DataFrame) -> pd.DataFrame:
     matrix = pd.crosstab(trans["state"], trans["next_state"], normalize="index")
     matrix = matrix.reindex(index=["Bear", "Base", "Bull"], columns=["Bear", "Base", "Bull"]).fillna(0.0)
     return enforce_transition_floor(matrix)
+
+
+def estimate_hmm_emissions(state_df: pd.DataFrame, emission_scale: float) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    emissions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    cols = ["rev_growth_yoy", "ebit_margin", "fcff_margin"]
+    for state in ["Bear", "Base", "Bull"]:
+        sub = state_df[state_df["state"] == state][cols].copy()
+        mu = sub.mean().to_numpy()
+        cov = np.cov(sub.to_numpy().T) + np.eye(len(cols)) * 1e-4
+        emissions[state] = (mu, cov * emission_scale)
+    return emissions
+
+
+def hmm_smoothed_state_probs(
+    history: pd.DataFrame,
+    start_probs: np.ndarray,
+    transition_df: pd.DataFrame,
+    emissions: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> np.ndarray:
+    states = ["Bear", "Base", "Bull"]
+    observations = history[["rev_growth_yoy", "ebit_margin", "fcff_margin"]].to_numpy()
+    n_obs = observations.shape[0]
+    n_states = len(states)
+    transition = transition_df.loc[states, states].to_numpy()
+    emission_probs = np.zeros((n_obs, n_states))
+    for t in range(n_obs):
+        for j, state in enumerate(states):
+            mu, cov = emissions[state]
+            emission_probs[t, j] = max(
+                stats.multivariate_normal.pdf(observations[t], mean=mu, cov=cov),
+                1e-12,
+            )
+    alpha = np.zeros((n_obs, n_states))
+    scales = np.zeros(n_obs)
+    alpha[0] = start_probs * emission_probs[0]
+    scales[0] = alpha[0].sum()
+    alpha[0] /= scales[0]
+    for t in range(1, n_obs):
+        alpha[t] = emission_probs[t] * (alpha[t - 1] @ transition)
+        scales[t] = alpha[t].sum()
+        alpha[t] /= scales[t]
+    beta = np.ones((n_obs, n_states))
+    for t in range(n_obs - 2, -1, -1):
+        beta[t] = transition @ (emission_probs[t + 1] * beta[t + 1])
+        beta[t] /= beta[t].sum()
+    gamma = alpha * beta
+    gamma /= gamma.sum(axis=1, keepdims=True)
+    return gamma
 
 
 def adjust_transition_for_macro(base_transition_df: pd.DataFrame, stress_level: float) -> pd.DataFrame:
@@ -527,20 +733,30 @@ def build_macro_start_prior(stress_level: float) -> np.ndarray:
     return prior / prior.sum()
 
 
-def build_final_start_probs(state_df: pd.DataFrame, history: pd.DataFrame, stress_level: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    latest = history.iloc[-1]
+def build_final_start_probs(
+    state_df: pd.DataFrame,
+    history: pd.DataFrame,
+    stress_level: float,
+    transition_df: pd.DataFrame,
+    math_cfg,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    filtered_state = build_filtered_history_state(history, math_cfg)
     peer_probs = infer_peer_likelihood_start_probs(
         state_df,
-        mntn_growth=latest["rev_growth_yoy"],
-        mntn_margin=latest["ebit_margin"],
-        mntn_fcff_margin=latest["fcff_margin"],
+        mntn_growth=filtered_state["filtered_growth"],
+        mntn_margin=filtered_state["filtered_margin"],
+        mntn_fcff_margin=filtered_state["filtered_fcff"],
     )
     macro_prior = build_macro_start_prior(stress_level)
-    raw = 0.45 * peer_probs + 0.55 * macro_prior
+    emissions = estimate_hmm_emissions(state_df, math_cfg.hmm_emission_scale)
+    smoothed = hmm_smoothed_state_probs(history, macro_prior, transition_df, emissions)
+    hmm_probs = smoothed[-1]
+    hmm_weight = math_cfg.hmm_transition_blend
+    raw = (0.35 - 0.15 * hmm_weight) * peer_probs + (0.35 - 0.05 * hmm_weight) * macro_prior + (0.30 + 0.20 * hmm_weight) * hmm_probs
     raw = raw / raw.sum()
     raw = soften_probabilities(raw, temperature=2.75)
     final = apply_probability_floor(raw, floor=np.array([0.20, 0.30, 0.20]))
-    return final, peer_probs, macro_prior
+    return final, peer_probs, macro_prior, hmm_probs
 
 
 def simulate_regime_path(n_years: int, start_probs: np.ndarray, transition_matrix_df: pd.DataFrame, rng: np.random.Generator) -> list[str]:
@@ -569,17 +785,18 @@ def deterministic_expected_regime_path(start_probs: np.ndarray, transition_matri
     return path
 
 
-def sample_jump_shock(rng: np.random.Generator, params: dict[str, float]) -> tuple[float, float, int]:
-    jump_occurs = rng.uniform() < params["annual_prob"]
+def sample_jump_shock(inputs: ValuationInputs, regime: str, rng: np.random.Generator, params: dict[str, float]) -> tuple[float, float, int]:
+    jump_scale = inputs.math_config.regime_jump_multiplier.get(regime, 1.0)
+    jump_occurs = rng.uniform() < min(0.95, params["annual_prob"] * jump_scale)
     if not jump_occurs:
         return 0.0, 0.0, 0
     positive = rng.uniform() < params["positive_jump_prob"]
     if positive:
-        growth_hit = max(0.01, rng.normal(params["growth_jump_up_mean"], params["growth_jump_up_std"]))
-        margin_hit = max(0.003, rng.normal(params["margin_jump_up_mean"], params["margin_jump_up_std"]))
+        growth_hit = max(0.01, rng.normal(params["growth_jump_up_mean"] * jump_scale, params["growth_jump_up_std"] * jump_scale))
+        margin_hit = max(0.003, rng.normal(params["margin_jump_up_mean"] * jump_scale, params["margin_jump_up_std"] * jump_scale))
     else:
-        growth_hit = min(-0.005, rng.normal(params["growth_jump_down_mean"], params["growth_jump_down_std"]))
-        margin_hit = min(-0.002, rng.normal(params["margin_jump_down_mean"], params["margin_jump_down_std"]))
+        growth_hit = min(-0.005, rng.normal(params["growth_jump_down_mean"] * jump_scale, params["growth_jump_down_std"] * jump_scale))
+        margin_hit = min(-0.002, rng.normal(params["margin_jump_down_mean"] * jump_scale, params["margin_jump_down_std"] * jump_scale))
     return growth_hit, margin_hit, 1
 
 
@@ -999,17 +1216,26 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
     macro_transition_df = adjust_transition_for_macro(base_transition_df, run_config.macro_stress_level)
     macro_transition_df = cap_transition_persistence(macro_transition_df, max_diag=0.48)
     macro_transition_df = enforce_transition_floor(macro_transition_df)
-    final_start_probs, peer_start_probs, macro_prior = build_final_start_probs(state_df, history, run_config.macro_stress_level)
+    final_start_probs, peer_start_probs, macro_prior, hmm_start_probs = build_final_start_probs(
+        state_df,
+        history,
+        run_config.macro_stress_level,
+        macro_transition_df,
+        inputs.math_config,
+    )
+    filtered_state = build_filtered_history_state(history, inputs.math_config)
     start_probs_df = pd.DataFrame(
         {
             "Regime": ["Bear", "Base", "Bull"],
             "Peer Likelihood": peer_start_probs,
             "Macro Prior": macro_prior,
+            "HMM Posterior": hmm_start_probs,
             "Final Start Probability": final_start_probs,
         }
     )
 
-    uniforms = qmc.LatinHypercube(d=6, seed=run_config.seed).random(n=run_config.n_sims)
+    copula_corr = build_prior_copula_corr(comp_panel)
+    uniforms = sample_t_copula_uniforms(run_config.n_sims, copula_corr, inputs.math_config.copula_df, run_config.seed)
     values = np.empty(run_config.n_sims)
     all_regime_paths = []
     all_wacc_paths = []
@@ -1019,13 +1245,13 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
     all_sbc_paths = []
     thesis_labels = []
     jump_counts = np.zeros(run_config.n_sims)
+    particle_quality_draws = np.zeros(run_config.n_sims)
     long_run_growth_draws = np.zeros(run_config.n_sims)
     terminal_margin_draws = np.zeros(run_config.n_sims)
     d_and_a_draws = np.zeros(run_config.n_sims)
     capex_draws = np.zeros(run_config.n_sims)
     nwc_draws = np.zeros(run_config.n_sims)
     terminal_growth_draws = np.zeros(run_config.n_sims)
-    latest = history.iloc[-1]
     years = inputs.forecast_config.projection_years
     thesis_cases, thesis_weights = _thesis_case_weights(inputs)
 
@@ -1037,10 +1263,16 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         prior_capex = sample_bayesian_prior(uniforms[i, 3], priors["capex_pct"])
         prior_nwc = sample_bayesian_prior(uniforms[i, 4], priors["nwc_pct"])
         terminal_growth = sample_bayesian_prior(uniforms[i, 5], priors["terminal_growth"])
+        particle_quality_draw = rng.normal(filtered_state["particle_quality"], max(filtered_state["particle_quality_std"], 0.05))
+        particle_quality_draws[i] = particle_quality_draw
 
-        thesis_start_growth = np.clip(metrics["company_anchor_growth"] + case.start_growth_adjustment, 0.01, 0.40)
-        thesis_long_run_growth = case.long_run_growth_override if case.long_run_growth_override is not None else metrics["company_anchor_growth"]
-        thesis_terminal_margin = case.terminal_ebit_margin_override if case.terminal_ebit_margin_override is not None else metrics["company_anchor_margin"]
+        thesis_start_growth = np.clip(metrics["company_anchor_growth"] + case.start_growth_adjustment + 0.020 * filtered_state["latent_quality"], 0.01, 0.40)
+        thesis_long_run_growth = (
+            case.long_run_growth_override if case.long_run_growth_override is not None else metrics["company_anchor_growth"]
+        ) + 0.015 * particle_quality_draw
+        thesis_terminal_margin = (
+            case.terminal_ebit_margin_override if case.terminal_ebit_margin_override is not None else metrics["company_anchor_margin"]
+        ) + 0.010 * filtered_state["latent_quality"]
         long_run_growth = run_config.shrinkage * prior_growth + (1 - run_config.shrinkage) * thesis_long_run_growth
         terminal_ebit_margin = run_config.shrinkage * prior_margin + (1 - run_config.shrinkage) * thesis_terminal_margin
         d_and_a_pct = run_config.shrinkage * prior_dna + (1 - run_config.shrinkage) * max(0.0, metrics["company_anchor_dna"] + case.d_and_a_pct_adjustment)
@@ -1058,7 +1290,10 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         terminal_growth_draws[i] = terminal_growth
 
         regime_path = simulate_regime_path(years, final_start_probs, macro_transition_df, rng)
-        ebit_margin_start = max(0.03, latest["ebit_margin"] + case.ebit_margin_start_adjustment + regime_cfg.regime_margin_shift[regime_path[0]])
+        ebit_margin_start = max(
+            0.03,
+            metrics["filtered_margin"] + case.ebit_margin_start_adjustment + regime_cfg.regime_margin_shift[regime_path[0]],
+        )
         margin_shock_accum = 0.0
         regime_wacc_path = []
         jump_total = 0
@@ -1066,7 +1301,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
 
         for t in range(years):
             reg = regime_path[t]
-            jump_g, jump_m, jump_flag = sample_jump_shock(rng, regime_cfg.jump_params)
+            jump_g, jump_m, jump_flag = sample_jump_shock(inputs, reg, rng, regime_cfg.jump_params)
             growth_adjustments.append(regime_cfg.regime_growth_shift[reg] + jump_g)
             margin_shock_accum += jump_m
             jump_total += jump_flag
@@ -1082,6 +1317,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
             regime_path=regime_path,
             growth_adjustments=growth_adjustments,
             margin_end_adjustment=regime_cfg.regime_margin_shift[regime_path[-1]] + margin_shock_accum,
+            latent_quality=0.5 * filtered_state["latent_quality"] + 0.5 * particle_quality_draw,
             rng=rng,
         )
         forecast_df = build_operating_forecast(
@@ -1138,6 +1374,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
             "year1_margin": all_margin_paths[:, 0],
             "year5_margin": all_margin_paths[:, horizon_5_idx],
             "jump_count": jump_counts,
+            "particle_quality_draw": particle_quality_draws,
             "long_run_growth_draw": long_run_growth_draws,
             "terminal_margin_draw": terminal_margin_draws,
             "d_and_a_pct_draw": d_and_a_draws,
@@ -1170,7 +1407,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
 
     ending_regime_df = simulation_df.groupby("end_regime")["value_per_share"].agg(["count", "mean", "median", "min", "max"]).sort_values("mean").reset_index()
     driver_corr_df = (
-        simulation_df[["value_per_share", "avg_wacc", "avg_growth", "avg_margin", "jump_count", "long_run_growth_draw", "terminal_margin_draw", "capex_pct_draw", "nwc_pct_draw", "terminal_growth_draw"]]
+        simulation_df[["value_per_share", "avg_wacc", "avg_growth", "avg_margin", "jump_count", "particle_quality_draw", "long_run_growth_draw", "terminal_margin_draw", "capex_pct_draw", "nwc_pct_draw", "terminal_growth_draw"]]
         .corr()[["value_per_share"]]
         .sort_values("value_per_share", ascending=False)
         .reset_index()
@@ -1423,7 +1660,13 @@ def structural_sobol_valuation_wrapper(x: np.ndarray, inputs: ValuationInputs, p
     macro_transition_df = adjust_transition_for_macro(base_transition_df, macro_stress_level)
     macro_transition_df = cap_transition_persistence(macro_transition_df, max_diag=persistence_cap)
     macro_transition_df = enforce_transition_floor(macro_transition_df)
-    final_start_probs, _, _ = build_final_start_probs(state_df, history, macro_stress_level)
+    final_start_probs, _, _, _ = build_final_start_probs(
+        state_df,
+        history,
+        macro_stress_level,
+        macro_transition_df,
+        inputs.math_config,
+    )
     years = inputs.forecast_config.projection_years
     regime_path = deterministic_expected_regime_path(final_start_probs, macro_transition_df, n_years=years)
     blended_long_run_growth = shrinkage * long_run_growth + (1.0 - shrinkage) * metrics["company_anchor_growth"]

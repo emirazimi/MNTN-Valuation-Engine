@@ -107,6 +107,15 @@
     "peer_recency_half_life_quarters": 8.0,
     "peer_relevance_strength": 5.0,
     "hierarchical_shrinkage": 0.30,
+    "wasserstein_blend": 0.55,
+    "kalman_observation_var": 0.010,
+    "kalman_state_var": 0.004,
+    "hmm_emission_scale": 1.35,
+    "hmm_transition_blend": 0.35,
+    "particle_count": 250,
+    "particle_state_std": 0.10,
+    "particle_obs_scale": 0.06,
+    "copula_df": 7.0,
     "growth_mean_reversion": 0.18,
     "margin_mean_reversion": 0.16,
     "factor_persistence": 0.74,
@@ -115,6 +124,19 @@
     "capital_factor_vol": 0.55,
     "idiosyncratic_growth_vol": 0.03,
     "idiosyncratic_margin_vol": 0.015,
+    "stochastic_vol_mean_reversion": 0.42,
+    "stochastic_vol_long_run": 0.95,
+    "stochastic_vol_of_vol": 0.22,
+    "regime_vol_multiplier": {
+      "Bear": 1.30,
+      "Base": 1.00,
+      "Bull": 0.88
+    },
+    "regime_jump_multiplier": {
+      "Bear": 1.20,
+      "Base": 1.00,
+      "Bull": 1.10
+    },
     "growth_factor_loadings": {
       "macro": 0.035,
       "execution": 0.025,

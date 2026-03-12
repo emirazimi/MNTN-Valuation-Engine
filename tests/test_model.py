@@ -3,17 +3,25 @@ import shutil
 import tempfile
 import unittest
 
+import numpy as np
 import pandas as pd
 
 from mntn_valuation import export_results, load_inputs, run_valuation
 from mntn_valuation.model import (
     apply_growth_margin_premium,
+    assign_empirical_states,
+    build_filtered_history_state,
     build_operating_forecast,
+    build_prior_copula_corr,
     dcf_fcff_regime_discounted,
     dcf_from_operating_forecast,
+    estimate_hmm_emissions,
+    estimate_transition_matrix,
     enforce_transition_floor,
     fit_empirical_bayes_priors,
+    hmm_smoothed_state_probs,
     sample_bayesian_prior,
+    sample_t_copula_uniforms,
 )
 
 
@@ -102,6 +110,35 @@ class ModelTests(unittest.TestCase):
         )
         result = dcf_from_operating_forecast(forecast, 0.03, inputs.snapshot.cash_2025, inputs.snapshot.debt_2025)
         self.assertGreater(result["value_per_share"], 0)
+
+    def test_filtered_history_state_returns_latent_metrics(self) -> None:
+        inputs = load_inputs("MNTN", DATA_DIR, CONFIG_PATH)
+        state = build_filtered_history_state(inputs.history.data, inputs.math_config)
+        self.assertIn("filtered_growth", state)
+        self.assertIn("latent_quality", state)
+        self.assertIn("particle_quality", state)
+
+    def test_t_copula_uniforms_are_bounded(self) -> None:
+        inputs = load_inputs("MNTN", DATA_DIR, CONFIG_PATH)
+        corr = build_prior_copula_corr(inputs.peer_panel.data)
+        uniforms = sample_t_copula_uniforms(32, corr, inputs.math_config.copula_df, seed=42)
+        self.assertEqual(uniforms.shape, (32, 6))
+        self.assertTrue(((uniforms > 0) & (uniforms < 1)).all())
+
+    def test_hmm_smoothed_probs_normalize(self) -> None:
+        inputs = load_inputs("MNTN", DATA_DIR, CONFIG_PATH)
+        state_df = assign_empirical_states(inputs.peer_panel.data)
+        transition_df = estimate_transition_matrix(state_df)
+        emissions = estimate_hmm_emissions(state_df, inputs.math_config.hmm_emission_scale)
+        probs = hmm_smoothed_state_probs(
+            inputs.history.data,
+            start_probs=np.array([0.2, 0.5, 0.3]),
+            transition_df=transition_df,
+            emissions=emissions,
+        )
+        self.assertEqual(probs.shape[1], 3)
+        for row_sum in probs.sum(axis=1):
+            self.assertAlmostEqual(row_sum, 1.0, places=6)
 
 
 class IntegrationTests(unittest.TestCase):

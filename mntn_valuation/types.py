@@ -102,6 +102,15 @@ class MathConfig:
     peer_recency_half_life_quarters: float
     peer_relevance_strength: float
     hierarchical_shrinkage: float
+    wasserstein_blend: float
+    kalman_observation_var: float
+    kalman_state_var: float
+    hmm_emission_scale: float
+    hmm_transition_blend: float
+    particle_count: int
+    particle_state_std: float
+    particle_obs_scale: float
+    copula_df: float
     growth_mean_reversion: float
     margin_mean_reversion: float
     factor_persistence: float
@@ -110,6 +119,11 @@ class MathConfig:
     capital_factor_vol: float
     idiosyncratic_growth_vol: float
     idiosyncratic_margin_vol: float
+    stochastic_vol_mean_reversion: float
+    stochastic_vol_long_run: float
+    stochastic_vol_of_vol: float
+    regime_vol_multiplier: dict[str, float]
+    regime_jump_multiplier: dict[str, float]
     growth_factor_loadings: dict[str, float]
     margin_factor_loadings: dict[str, float]
 
