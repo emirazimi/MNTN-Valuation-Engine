@@ -125,5 +125,27 @@
       "execution": 0.015,
       "capital": -0.006
     }
+  },
+  "market": {
+    "benchmark_cagr": 0.08,
+    "dcf_weight_year1": 0.30,
+    "dcf_weight_year2": 0.45,
+    "dcf_weight_year5": 0.70,
+    "revenue_multiple_weight": 0.60,
+    "ebitda_multiple_weight": 0.40,
+    "small_cap_upside_bias": 0.09,
+    "small_cap_rerating_vol": 0.20,
+    "rerating_floor": 0.70,
+    "rerating_cap": 2.10,
+    "thesis_rerating_multiplier": {
+      "Bear": 0.82,
+      "Base": 1.12,
+      "Bull": 1.40
+    },
+    "regime_rerating_multiplier": {
+      "Bear": 0.88,
+      "Base": 1.00,
+      "Bull": 1.14
+    }
   }
 }

@@ -94,6 +94,7 @@ def export_results(results: ValuationResults, output_dir: str | Path, include_pl
     results.summary_df.to_csv(output_dir / "monte_carlo_summary.csv", index=False)
     results.simulation_df.to_csv(output_dir / "monte_carlo_simulations.csv", index=False)
     results.horizon_summary_df.to_csv(output_dir / "horizon_valuation_summary.csv", index=False)
+    results.return_summary_df.to_csv(output_dir / "return_summary.csv", index=False)
     results.ending_regime_df.to_csv(output_dir / "ending_regime_breakdown.csv", index=False)
     results.driver_corr_df.to_csv(output_dir / "driver_correlations.csv", index=False)
     results.multiples_df.to_csv(output_dir / "multiple_cross_check.csv", index=False)

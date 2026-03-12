@@ -115,6 +115,22 @@ class MathConfig:
 
 
 @dataclass(frozen=True)
+class MarketConfig:
+    benchmark_cagr: float
+    dcf_weight_year1: float
+    dcf_weight_year2: float
+    dcf_weight_year5: float
+    revenue_multiple_weight: float
+    ebitda_multiple_weight: float
+    small_cap_upside_bias: float
+    small_cap_rerating_vol: float
+    rerating_floor: float
+    rerating_cap: float
+    thesis_rerating_multiplier: dict[str, float]
+    regime_rerating_multiplier: dict[str, float]
+
+
+@dataclass(frozen=True)
 class ValuationRunConfig:
     n_sims: int = 30000
     seed: int = 42
@@ -142,6 +158,7 @@ class ValuationInputs:
     forecast_config: ForecastConfig
     thesis_config: ThesisConfig
     math_config: MathConfig
+    market_config: MarketConfig
     run_config: ValuationRunConfig
     config_path: Path
     data_dir: Path
@@ -161,6 +178,7 @@ class ValuationResults:
     summary_df: pd.DataFrame
     simulation_df: pd.DataFrame
     horizon_summary_df: pd.DataFrame
+    return_summary_df: pd.DataFrame
     ending_regime_df: pd.DataFrame
     driver_corr_df: pd.DataFrame
     multiples_df: pd.DataFrame
@@ -174,3 +192,5 @@ class ValuationResults:
     wacc_paths: Any
     share_paths: Any
     valuation_paths: Any
+    market_value_paths: Any
+    blended_value_paths: Any

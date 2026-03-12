@@ -128,10 +128,14 @@ class IntegrationTests(unittest.TestCase):
         results = run_valuation(inputs, run_config=fast_config)
         self.assertFalse(results.summary_df.empty)
         self.assertFalse(results.horizon_summary_df.empty)
+        self.assertFalse(results.return_summary_df.empty)
         self.assertIn("median", results.summary_df["Metric"].tolist())
         self.assertIn("5Y", results.horizon_summary_df["Horizon"].tolist())
+        self.assertIn("5Y", results.return_summary_df["Horizon"].tolist())
         self.assertIn("ending_shares", results.simulation_df.columns)
         self.assertIn("year1_sbc_shares", results.simulation_df.columns)
+        self.assertIn("year5_blended_value", results.simulation_df.columns)
+        self.assertIn("year5_alpha_vs_benchmark", results.simulation_df.columns)
         self.assertEqual(set(results.scenario_df["Scenario"].tolist()), {"Bear", "Base", "Bull"})
         self.assertGreater(results.summary_df.loc[results.summary_df["Metric"] == "median", "Value"].iloc[0], 0)
 
@@ -141,6 +145,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertTrue((output_dir / "scenario_table.csv").exists())
             self.assertTrue((output_dir / "monte_carlo_summary.csv").exists())
             self.assertTrue((output_dir / "horizon_valuation_summary.csv").exists())
+            self.assertTrue((output_dir / "return_summary.csv").exists())
             exported = pd.read_csv(output_dir / "scenario_table.csv")
             self.assertFalse(exported.empty)
         finally:

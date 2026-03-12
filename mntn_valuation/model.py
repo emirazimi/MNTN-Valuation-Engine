@@ -796,6 +796,82 @@ def multiple_cross_check(peer_multiples_df: pd.DataFrame, snapshot, metrics: dic
     return pd.DataFrame(rows)
 
 
+def _dcf_weight_for_year(inputs: ValuationInputs, year: int) -> float:
+    market_cfg = inputs.market_config
+    years = np.array([1.0, 2.0, 5.0], dtype=float)
+    weights = np.array(
+        [market_cfg.dcf_weight_year1, market_cfg.dcf_weight_year2, market_cfg.dcf_weight_year5],
+        dtype=float,
+    )
+    return float(np.interp(float(year), years, weights))
+
+
+def build_market_valuation_paths(
+    inputs: ValuationInputs,
+    peer_multiples_df: pd.DataFrame,
+    growth_paths: np.ndarray,
+    margin_paths: np.ndarray,
+    d_and_a_draws: np.ndarray,
+    share_paths: np.ndarray,
+    regime_paths: np.ndarray,
+    thesis_labels: list[str],
+    rng: np.random.Generator,
+) -> np.ndarray:
+    snapshot = inputs.snapshot
+    market_cfg = inputs.market_config
+    n_sims, n_years = growth_paths.shape
+    revenue_paths = snapshot.revenue_2026_mid * np.cumprod(1 + growth_paths, axis=1)
+    peer_growth_median = float(peer_multiples_df["ntm_revenue_growth"].median())
+    peer_margin_median = float(peer_multiples_df["ntm_ebitda_margin"].median())
+    med_ev_rev = float(peer_multiples_df["ev_revenue_ntm"].median())
+    med_ev_ebitda = float(peer_multiples_df["ev_ebitda_ntm"].median())
+    market_paths = np.zeros((n_sims, n_years))
+
+    for i in range(n_sims):
+        thesis_mult = market_cfg.thesis_rerating_multiplier.get(thesis_labels[i], 1.0)
+        for t in range(n_years):
+            revenue_t = revenue_paths[i, t]
+            ebitda_margin_t = np.clip(margin_paths[i, t] + d_and_a_draws[i], 0.03, 0.50)
+            regime_mult = market_cfg.regime_rerating_multiplier.get(regime_paths[i, t], 1.0)
+            rerating_noise = np.exp(rng.normal(market_cfg.small_cap_upside_bias, market_cfg.small_cap_rerating_vol))
+            rerating_mult = np.clip(
+                thesis_mult * regime_mult * rerating_noise,
+                market_cfg.rerating_floor,
+                market_cfg.rerating_cap,
+            )
+            ev_rev_multiple = apply_growth_margin_premium(
+                med_ev_rev,
+                growth_paths[i, t],
+                peer_growth_median,
+                ebitda_margin_t,
+                peer_margin_median,
+            )
+            ev_ebitda_multiple = apply_growth_margin_premium(
+                med_ev_ebitda,
+                growth_paths[i, t],
+                peer_growth_median,
+                ebitda_margin_t,
+                peer_margin_median,
+            )
+            ev_rev = ev_rev_multiple * rerating_mult * revenue_t
+            ev_ebitda = ev_ebitda_multiple * rerating_mult * revenue_t * ebitda_margin_t
+            enterprise_value = (
+                market_cfg.revenue_multiple_weight * ev_rev
+                + market_cfg.ebitda_multiple_weight * ev_ebitda
+            )
+            equity_value = enterprise_value + snapshot.cash_2025 - snapshot.debt_2025
+            market_paths[i, t] = equity_value / share_paths[i, t]
+    return market_paths
+
+
+def blend_valuation_paths(inputs: ValuationInputs, dcf_paths: np.ndarray, market_paths: np.ndarray) -> np.ndarray:
+    blended = np.zeros_like(dcf_paths)
+    for year in range(1, dcf_paths.shape[1] + 1):
+        dcf_weight = _dcf_weight_for_year(inputs, year)
+        blended[:, year - 1] = dcf_weight * dcf_paths[:, year - 1] + (1 - dcf_weight) * market_paths[:, year - 1]
+    return blended
+
+
 def build_mc_valuation_paths_rolling_terminal(
     snapshot,
     growth_paths: np.ndarray,
@@ -872,6 +948,37 @@ def build_horizon_summary(
                 "p75": np.percentile(values_10y, 75),
                 "p90": np.percentile(values_10y, 90),
                 "prob_above_current": np.mean(values_10y > current_price),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_return_summary(
+    valuation_paths: np.ndarray,
+    current_price: float,
+    benchmark_cagr: float,
+) -> pd.DataFrame:
+    horizon_map = {"1Y": 1, "2Y": 2, "5Y": 5}
+    rows = []
+    max_horizon = valuation_paths.shape[1]
+    for label, horizon in horizon_map.items():
+        if horizon > max_horizon:
+            continue
+        values = np.maximum(valuation_paths[:, horizon - 1], 0.01)
+        cagr = (values / current_price) ** (1 / horizon) - 1
+        benchmark_value = current_price * (1 + benchmark_cagr) ** horizon
+        rows.append(
+            {
+                "Horizon": label,
+                "benchmark_cagr": benchmark_cagr,
+                "benchmark_value": benchmark_value,
+                "mean_cagr": cagr.mean(),
+                "median_cagr": np.median(cagr),
+                "p25_cagr": np.percentile(cagr, 25),
+                "p75_cagr": np.percentile(cagr, 75),
+                "mean_alpha": cagr.mean() - benchmark_cagr,
+                "median_alpha": np.median(cagr) - benchmark_cagr,
+                "prob_beat_benchmark": np.mean(values > benchmark_value),
             }
         )
     return pd.DataFrame(rows)
@@ -1081,12 +1188,37 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         share_paths=all_share_paths,
         terminal_growth_draws=terminal_growth_draws,
     )
+    market_value_paths = build_market_valuation_paths(
+        inputs=inputs,
+        peer_multiples_df=peer_multiples_df,
+        growth_paths=all_growth_paths,
+        margin_paths=all_margin_paths,
+        d_and_a_draws=d_and_a_draws,
+        share_paths=all_share_paths,
+        regime_paths=all_regime_paths,
+        thesis_labels=thesis_labels,
+        rng=rng,
+    )
+    blended_value_paths = blend_valuation_paths(inputs, valuation_paths, market_value_paths)
     horizon_summary_df = build_horizon_summary(
-        valuation_paths,
+        blended_value_paths,
         snapshot.current_price,
         terminal_growth_draws,
         inputs.forecast_config.terminal_dilution_rate,
     )
+    return_summary_df = build_return_summary(
+        blended_value_paths,
+        snapshot.current_price,
+        inputs.market_config.benchmark_cagr,
+    )
+    simulation_df["year1_market_value"] = market_value_paths[:, 0]
+    simulation_df["year2_market_value"] = market_value_paths[:, min(1, years - 1)]
+    simulation_df["year5_market_value"] = market_value_paths[:, horizon_5_idx]
+    simulation_df["year1_blended_value"] = blended_value_paths[:, 0]
+    simulation_df["year2_blended_value"] = blended_value_paths[:, min(1, years - 1)]
+    simulation_df["year5_blended_value"] = blended_value_paths[:, horizon_5_idx]
+    simulation_df["year5_blended_cagr"] = (np.maximum(blended_value_paths[:, horizon_5_idx], 0.01) / snapshot.current_price) ** (1 / 5) - 1
+    simulation_df["year5_alpha_vs_benchmark"] = simulation_df["year5_blended_cagr"] - inputs.market_config.benchmark_cagr
     return {
         "state_df": state_df,
         "base_transition_df": base_transition_df,
@@ -1095,6 +1227,7 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         "summary_df": summary_df,
         "simulation_df": simulation_df,
         "horizon_summary_df": horizon_summary_df,
+        "return_summary_df": return_summary_df,
         "ending_regime_df": ending_regime_df,
         "driver_corr_df": driver_corr_df,
         "multiples_df": multiples_df,
@@ -1103,8 +1236,10 @@ def advanced_monte_carlo_empirical(inputs: ValuationInputs, priors: dict[str, di
         "growth_paths": all_growth_paths,
         "margin_paths": all_margin_paths,
         "wacc_paths": all_wacc_paths,
-            "share_paths": all_share_paths,
-            "valuation_paths": valuation_paths,
+        "share_paths": all_share_paths,
+        "valuation_paths": valuation_paths,
+        "market_value_paths": market_value_paths,
+        "blended_value_paths": blended_value_paths,
     }
 
 
@@ -1373,6 +1508,7 @@ def run_valuation(inputs: ValuationInputs, run_config=None) -> ValuationResults:
             forecast_config=inputs.forecast_config,
             thesis_config=inputs.thesis_config,
             math_config=inputs.math_config,
+            market_config=inputs.market_config,
             run_config=run_config,
             config_path=inputs.config_path,
             data_dir=inputs.data_dir,
@@ -1397,6 +1533,7 @@ def run_valuation(inputs: ValuationInputs, run_config=None) -> ValuationResults:
         summary_df=mc["summary_df"],
         simulation_df=mc["simulation_df"],
         horizon_summary_df=mc["horizon_summary_df"],
+        return_summary_df=mc["return_summary_df"],
         ending_regime_df=mc["ending_regime_df"],
         driver_corr_df=mc["driver_corr_df"],
         multiples_df=mc["multiples_df"],
@@ -1410,4 +1547,6 @@ def run_valuation(inputs: ValuationInputs, run_config=None) -> ValuationResults:
         wacc_paths=mc["wacc_paths"],
         share_paths=mc["share_paths"],
         valuation_paths=mc["valuation_paths"],
+        market_value_paths=mc["market_value_paths"],
+        blended_value_paths=mc["blended_value_paths"],
     )
