@@ -192,6 +192,12 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(FileNotFoundError, "Missing required input file"):
             load_inputs("NOPE", DATA_DIR, CONFIG_PATH)
 
+    def test_meli_inputs_load(self) -> None:
+        inputs = load_inputs("MELI", DATA_DIR, ROOT / "configs" / "meli.json")
+        self.assertEqual(inputs.snapshot.company_id, "MELI")
+        self.assertGreater(inputs.snapshot.revenue_2025, 0)
+        self.assertFalse(inputs.history.data.empty)
+
 
 if __name__ == "__main__":
     unittest.main()
