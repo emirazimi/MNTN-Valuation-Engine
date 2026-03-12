@@ -58,6 +58,22 @@ The current model uses several statistical layers beyond a basic DCF:
 - `Stochastic volatility`: annual growth and margin shocks now have volatility paths that mean-revert and change by regime.
 - `Jump diffusion`: jump probabilities and magnitudes scale by regime, allowing asymmetric event shocks in small-cap scenarios.
 
+## Methodology
+
+This engine is designed as a latent-state, regime-aware valuation framework for MNTN. The objective is not only to estimate a static intrinsic value, but to translate a medium-term investment thesis into a probabilistic range of operating and valuation outcomes over a 1-5 year horizon.
+
+The process begins with local company and peer inputs. MNTN's recent operating history is filtered through Kalman methods to estimate smoother latent levels of growth, margin, and cash generation. A particle filter is then used to estimate a latent business-quality factor, which acts as a hidden state variable inside the simulation engine and influences long-run growth and profitability paths.
+
+Peer calibration is performed using both point-in-time similarity and Wasserstein-distance similarity. This means peer relevance is determined not only by who looks similar in the latest quarter, but also by which companies have historically exhibited operating behavior that resembles MNTN across growth, margin, and cash-flow distributions. These peer weights feed the empirical-Bayes prior construction for the core valuation drivers.
+
+The regime engine models the business environment through latent Bear, Base, and Bull states. A transition matrix is estimated from peer histories, adjusted for macro conditions, and refined using a Hidden Markov Model. The HMM uses MNTN's observed operating history to infer a smoothed posterior over latent regimes, producing a more disciplined starting regime distribution than a purely heuristic assignment.
+
+The Monte Carlo layer draws fundamental assumptions jointly through a t-copula. This preserves realistic dependence across long-run growth, margins, reinvestment intensity, and terminal assumptions, including tail dependence in stronger and weaker outcomes. Simulated operating paths then evolve through mean-reverting processes driven by latent factors, stochastic volatility, and regime-scaled jump shocks, which is intended to better reflect the behavior of a smaller-cap growth company.
+
+Each simulated path is converted into a full operating forecast covering revenue, margins, cash flow, reinvestment, dilution, and share count. Those paths are then valued in two ways: a DCF-based intrinsic-value path and a market-based rerating path derived from peer multiple logic. The model blends these views by horizon so that shorter and medium-term outputs reflect both operating execution and the potential for market revaluation.
+
+The final outputs are designed to support investment decisions rather than only valuation mechanics. In addition to scenario analysis and Monte Carlo valuation summaries, the engine reports 1Y, 2Y, and 5Y horizon values, benchmark-relative return and alpha estimates, regime diagnostics, and simulation-level path detail. The result is a framework built to answer not only what MNTN may be worth, but what distribution of outcomes an investor is underwriting over the actual holding period.
+
 ## Usage
 
 Run the model:
